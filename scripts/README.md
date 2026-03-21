@@ -11,10 +11,12 @@ Current status:
 - `list` child blocks are extracted and rendered item-by-item
 - `inline_equation` is preserved via placeholders during translation
 - `ref_text` is skipped and not sent to translation
+- `image`, `image_body`, and `image_caption` are currently left untouched to avoid OCR caption misclassification from destabilizing layout
 - translation supports DeepSeek and OpenAI-compatible local endpoints
 - translation now supports concurrent batch workers and HTTP session reuse
 - full-book translation now supports continuation groups across page boundaries
 - `precise` mode adds LLM block classification for suspicious OCR text blocks before translation
+- `fast` and `sci` do not run the classifier; they rely on OCR block types plus skip policies
 - `sci` mode can infer the document domain from the first two PDF pages and inject document-specific guidance into later translation batches
 - full-book Typst build now compiles page overlays in parallel
 - if a page hits unsupported Typst math, that page falls back to plain-text overlay instead of failing the whole book
@@ -31,6 +33,12 @@ Current status:
   Translate a page range or the full book with a configurable OpenAI-compatible API.
 - `run_book.py`
   Translate and render a full book in one page-by-page pipeline.
+- `run_case.py`
+  Simplest one-command entry: point it at a folder containing exactly one `.json` and one `.pdf`, and it auto-discovers inputs, auto-names outputs, then runs the full pipeline.
+- `integrations/mineru/mineru_api.py`
+  Minimal MinerU precise-API caller. Supports both remote URL task submission and local-file upload + polling.
+- `integrations/mineru/mineru_api_example.py`
+  Lightweight URL-only MinerU example: submit a task and poll until done.
 
 ### `common/`
 
@@ -42,7 +50,7 @@ Current status:
 ### `ocr/`
 
 - `json_extractor.py`
-  Reads OCR JSON and extracts page/block text items. Skips `interline_equation`, `code`, `table`, and `ref_text`.
+  Reads OCR JSON and extracts page/block text items. Skips `interline_equation`, `code`, `table`, `ref_text`, `image`, `image_body`, and `image_caption`.
 - `models.py`
   OCR-side data structures.
 
@@ -102,6 +110,225 @@ Current status:
 The current preferred path is:
 
 `OCR JSON -> translation JSON -> render_payloads -> typst_page_renderer -> PDF`
+
+For the simplest day-to-day usage, prefer explicit source paths:
+
+```bash
+python scripts/run_case.py \
+  --source-json Data/test3/test3.json \
+  --source-pdf Data/test3/test3.pdf \
+  --mode sci \
+  --model deepseek-chat \
+  --base-url https://api.deepseek.com/v1 \
+  --api-key "$DEEPSEEK_API_KEY" \
+  --workers 50 \
+  --output-dir translations/test3-run \
+  --output test3-run.pdf
+```
+
+This will:
+
+- translate the whole document
+- render the final PDF
+- write translation JSONs under `output/translations/`
+- write the final PDF under `output/`
+
+## CLI Usage
+
+Use these commands from the repo root:
+
+```bash
+cd /home/wxyhgk/tmp/Code
+```
+
+Recommended default entry:
+
+```bash
+python scripts/run_case.py \
+  --source-json Data/test9/test9.json \
+  --source-pdf Data/test9/test9.pdf \
+  --mode sci \
+  --model deepseek-chat \
+  --base-url https://api.deepseek.com/v1 \
+  --api-key "$DEEPSEEK_API_KEY" \
+  --workers 50 \
+  --output-dir translations/test9-run \
+  --output test9-run.pdf
+```
+
+What each main CLI is for:
+
+- `run_case.py`
+  Recommended daily/API entry. Prefer explicit `--source-json`, `--source-pdf`, `--output-dir`, and `--output`. It also supports one fallback `input_dir` for local convenience.
+- `run_book.py`
+  Full end-to-end entry when you want to pass the JSON path, PDF path, output folder, and output PDF name explicitly.
+- `translate_book.py`
+  Translate only. Use this when you want to keep translation JSONs and rebuild multiple times without paying translation cost again.
+- `build_book.py`
+  Build only from existing translation JSONs.
+- `translate_page.py` / `build_page.py`
+  Single-page debugging tools.
+
+Current mode behavior:
+
+- `fast`
+  Fast general mode. No classifier.
+- `sci`
+  Recommended for papers. No classifier. It also infers document domain from the first two PDF pages and skips document tail after the last title.
+- `precise`
+  Experimental high-precision mode. This is the only mode that enables the LLM classifier for suspicious OCR blocks.
+
+Common output behavior:
+
+- translation JSONs are written under `output/translations/...`
+- final PDFs are written under `output/...`
+- if you omit `--end-page`, the full document is processed
+- the default render mode is `typst`
+- `--render-mode dual` outputs side-by-side pages: left original, right translated
+- MinerU integrated flows can also write everything into one structured job directory under `output/<job-id>/`
+
+Examples:
+
+MinerU all-in-one pipeline:
+
+```bash
+python scripts/integrations/mineru/mineru_pipeline.py \
+  --file-path Data/test9/test9.pdf \
+  --model-version vlm \
+  --mode sci \
+  --model Q3.5-turbo \
+  --base-url http://1.94.67.196:10001/v1
+```
+
+This creates:
+
+- `output/<job-id>/originPDF`
+- `output/<job-id>/jsonPDF`
+- `output/<job-id>/transPDF`
+
+`layout.json` is used as the default MinerU OCR JSON for the translation pipeline.
+
+MinerU middle-level job runner, only parse and unpack:
+
+```bash
+python scripts/integrations/mineru/mineru_job.py \
+  --file-path Data/test9/test9.pdf \
+  --model-version vlm \
+  --job-id 202603212300-demo
+```
+
+Migrate old `output/mineru/<case>` experiments into the new structured layout:
+
+```bash
+python scripts/integrations/mineru/migrate_legacy_output.py \
+  --legacy-root output/mineru/test9 \
+  --job-id 20260321-legacy-mineru-test9
+```
+
+This creates:
+
+- `output/202603212300-demo/originPDF`
+- `output/202603212300-demo/jsonPDF`
+- `output/202603212300-demo/transPDF`
+
+Use MinerU `layout.json` as the main OCR JSON input:
+
+```bash
+python scripts/run_case.py \
+  --source-json output/202603212300-demo/jsonPDF/unpacked/layout.json \
+  --source-pdf output/202603212300-demo/originPDF/test9.pdf \
+  --mode sci \
+  --model Q3.5-turbo \
+  --base-url http://1.94.67.196:10001/v1 \
+  --output-dir 202603212300-demo/transPDF/translations \
+  --output 202603212300-demo/transPDF/test9-translated.pdf
+```
+
+Low-level MinerU API script remains available when you only want the raw API response:
+
+```bash
+python scripts/integrations/mineru/mineru_api.py \
+  --token "$MINERU_TOKEN" \
+  --file-url "https://cdn-mineru.openxlab.org.cn/demo/example.pdf" \
+  --model-version vlm \
+  --poll \
+  --output-json output/mineru-result.json
+```
+
+Run a whole case folder with DeepSeek:
+
+```bash
+python scripts/run_case.py \
+  --source-json Data/test3/test3.json \
+  --source-pdf Data/test3/test3.pdf \
+  --mode sci \
+  --model deepseek-chat \
+  --base-url https://api.deepseek.com/v1 \
+  --api-key "$DEEPSEEK_API_KEY" \
+  --workers 50 \
+  --output-dir translations/test3-run \
+  --output test3-run.pdf
+```
+
+Run a whole case folder with the self-hosted endpoint:
+
+```bash
+python scripts/run_case.py \
+  --source-json Data/test9/test9.json \
+  --source-pdf Data/test9/test9.pdf \
+  --mode sci \
+  --model Q3.5-turbo \
+  --base-url http://1.94.67.196:10001/v1 \
+  --workers 50 \
+  --output-dir translations/test9-q35 \
+  --output test9-q35.pdf
+```
+
+Fallback auto-discovery mode for local manual use:
+
+```bash
+python scripts/run_case.py Data/test9 \
+  --mode sci \
+  --model deepseek-chat \
+  --base-url https://api.deepseek.com/v1 \
+  --api-key "$DEEPSEEK_API_KEY" \
+  --workers 50
+```
+
+Run with explicit paths instead of a case folder:
+
+```bash
+python scripts/run_book.py \
+  --source-json Data/test1/test1.json \
+  --source-pdf Data/test1/test1.pdf \
+  --mode sci \
+  --batch-size 6 \
+  --workers 4 \
+  --base-url http://1.94.67.196:10001/v1 \
+  --model Q3.5-turbo \
+  --output-dir translations/test1-run \
+  --output test1-run.pdf
+```
+
+Translate first, then rebuild repeatedly:
+
+```bash
+python scripts/translate_book.py \
+  --source-json Data/test1/test1.json \
+  --source-pdf Data/test1/test1.pdf \
+  --mode sci \
+  --batch-size 6 \
+  --workers 4 \
+  --base-url http://1.94.67.196:10001/v1 \
+  --model Q3.5-turbo \
+  --output-dir translations/test1-q35
+
+python scripts/build_book.py \
+  --translations-dir translations/test1-q35 \
+  --source-pdf Data/test1/test1.pdf \
+  --output test1-q35.pdf \
+  --render-mode typst
+```
 
 Rendering is paragraph-based:
 
@@ -183,6 +410,9 @@ The current direction is:
 - do not translate `code`
 - do not translate `table`
 - do not translate `ref_text`
+- do not translate `image`
+- do not translate `image_body`
+- do not translate `image_caption`
 
 In `precise` mode:
 
