@@ -5,9 +5,7 @@ import fitz
 
 from common.config import DEFAULT_FONT_PATH
 from common.config import TYPST_DEFAULT_FONT_FAMILY
-from ocr.json_extractor import extract_text_items
 from ocr.json_extractor import load_ocr_json
-from translation.domain_context import infer_domain_context
 from rendering.pdf_overlay import apply_translated_items_to_page
 from rendering.pdf_overlay import save_optimized_pdf
 from rendering.pdf_overlay import strip_page_links
@@ -16,6 +14,7 @@ from rendering.typst_page_renderer import build_dual_book_pdf
 from rendering.typst_page_renderer import build_book_typst_pdf
 from rendering.typst_page_renderer import overlay_translated_pages_on_doc
 from translation.deepseek_client import DEFAULT_BASE_URL
+from translation.policy_config import build_book_translation_policy_config
 from pipeline.book_translation_flow import translate_book_with_global_continuations
 from translation.translations import load_translations
 
@@ -27,19 +26,6 @@ def resolve_page_range(total_pages: int, start_page: int, end_page: int) -> tupl
         raise RuntimeError(f"Invalid page range: start_page={start}, end_page={stop}")
     return start, stop
 
-
-def find_last_title_cutoff(data: dict) -> tuple[int | None, int | None]:
-    pages = data.get("pdf_info", [])
-    last_page_idx = None
-    last_block_idx = None
-    for page_idx, page in enumerate(pages):
-        for block_idx, block in enumerate(page.get("para_blocks", [])):
-            if block.get("type") == "title":
-                last_page_idx = page_idx
-                last_block_idx = block_idx
-    return last_page_idx, last_block_idx
-
-
 def is_editable_pdf(doc: fitz.Document, start_page: int, end_page: int) -> bool:
     sample_pages = range(start_page, min(end_page, start_page + 2) + 1)
     words = 0
@@ -47,18 +33,6 @@ def is_editable_pdf(doc: fitz.Document, start_page: int, end_page: int) -> bool:
         if 0 <= page_idx < len(doc):
             words += len(doc[page_idx].get_text("words"))
     return words >= 20
-
-
-def extract_ocr_preview_text(data: dict, max_pages: int = 2) -> str:
-    pages = data.get("pdf_info", [])
-    parts: list[str] = []
-    for page_idx in range(min(max_pages, len(pages))):
-        items = extract_text_items(data, page_idx=page_idx)
-        page_texts = [item.text.strip() for item in items if item.text.strip()]
-        if page_texts:
-            parts.append(f"[Page {page_idx + 1}]\n" + "\n".join(page_texts))
-    return "\n\n".join(parts).strip()
-
 
 def translate_book_pipeline(
     *,
@@ -83,26 +57,21 @@ def translate_book_pipeline(
 
     start, stop = resolve_page_range(len(pages), start_page, end_page)
     page_indices = range(start, stop + 1)
-    sci_cutoff_page_idx = None
-    sci_cutoff_block_idx = None
-    domain_context: dict[str, str] | None = None
-    if mode == "sci":
-        sci_cutoff_page_idx, sci_cutoff_block_idx = find_last_title_cutoff(data)
-        if source_pdf_path is not None:
-            ocr_preview_text = extract_ocr_preview_text(data, max_pages=2)
-            domain_context = infer_domain_context(
-                source_pdf_path=source_pdf_path,
-                api_key=api_key,
-                model=model,
-                base_url=base_url,
-                preview_text_fallback=ocr_preview_text,
-                output_dir=output_dir,
-            )
-            if domain_context.get("domain") or domain_context.get("translation_guidance"):
-                print(
-                    f"sci domain: {domain_context.get('domain', '').strip() or 'unknown'}",
-                    flush=True,
-                )
+    policy_config = build_book_translation_policy_config(
+        data=data,
+        mode=mode,
+        skip_title_translation=skip_title_translation,
+        source_pdf_path=source_pdf_path,
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
+        output_dir=output_dir,
+    )
+    if policy_config.domain_context.get("domain") or policy_config.domain_context.get("translation_guidance"):
+        print(
+            f"sci domain: {policy_config.domain_context.get('domain', '').strip() or 'unknown'}",
+            flush=True,
+        )
     translated_pages_map, summaries = translate_book_with_global_continuations(
         data=data,
         output_dir=output_dir,
@@ -115,9 +84,10 @@ def translate_book_pipeline(
         mode=mode,
         classify_batch_size=max(1, classify_batch_size),
         skip_title_translation=skip_title_translation,
-        sci_cutoff_page_idx=sci_cutoff_page_idx,
-        sci_cutoff_block_idx=sci_cutoff_block_idx,
-        domain_guidance=(domain_context or {}).get("translation_guidance", ""),
+        sci_cutoff_page_idx=policy_config.sci_cutoff_page_idx,
+        sci_cutoff_block_idx=policy_config.sci_cutoff_block_idx,
+        policy_config=policy_config,
+        domain_guidance=policy_config.domain_guidance,
     )
     total_items = sum(item["total_items"] for item in summaries)
     translated_items = sum(item["translated_items"] for item in summaries)
@@ -130,7 +100,7 @@ def translate_book_pipeline(
         "translated_items": translated_items,
         "translated_pages_map": translated_pages_map,
         "summaries": summaries,
-        "domain_context": domain_context or {},
+        "domain_context": policy_config.domain_context,
     }
 
 

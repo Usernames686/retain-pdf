@@ -7,6 +7,7 @@ from translation.payload_ops import GROUP_ITEM_PREFIX
 from translation.payload_ops import apply_translated_text_map
 from translation.payload_ops import pending_translation_items
 from translation.payload_ops import summarize_payload
+from translation.policy_config import TranslationPolicyConfig
 from translation.policy_flow import apply_translation_policies
 from translation.retrying_translator import translate_batch
 from translation.translation_workflow import default_page_translation_name
@@ -30,6 +31,7 @@ def translate_book_pages(
     progress_prefix: str,
     sci_cutoff_page_idx: int | None = None,
     sci_cutoff_block_idx: int | None = None,
+    policy_config: TranslationPolicyConfig | None = None,
 ) -> tuple[dict[int, list[dict]], list[dict]]:
     pages = data.get("pdf_info", [])
     summaries: list[dict] = []
@@ -54,6 +56,7 @@ def translate_book_pages(
             skip_title_translation=skip_title_translation,
             sci_cutoff_page_idx=sci_cutoff_page_idx,
             sci_cutoff_block_idx=sci_cutoff_block_idx,
+            policy_config=policy_config,
         )
         summaries.append(summary)
         translated_pages_map[page_idx] = load_translations(translation_path)
@@ -93,6 +96,7 @@ def apply_page_policies(
     skip_title_translation: bool,
     sci_cutoff_page_idx: int | None,
     sci_cutoff_block_idx: int | None,
+    policy_config: TranslationPolicyConfig | None = None,
 ) -> int:
     classified_items = 0
     for page_idx in sorted(page_payloads):
@@ -108,6 +112,7 @@ def apply_page_policies(
             page_idx=page_idx,
             sci_cutoff_page_idx=sci_cutoff_page_idx,
             sci_cutoff_block_idx=sci_cutoff_block_idx,
+            policy_config=policy_config,
         )
         classified_items += page_classified
     return classified_items
@@ -217,8 +222,12 @@ def translate_book_with_global_continuations(
     skip_title_translation: bool,
     sci_cutoff_page_idx: int | None,
     sci_cutoff_block_idx: int | None,
+    policy_config: TranslationPolicyConfig | None = None,
     domain_guidance: str = "",
 ) -> tuple[dict[int, list[dict]], list[dict]]:
+    if not domain_guidance and policy_config is not None:
+        domain_guidance = policy_config.domain_guidance
+
     translation_paths, page_payloads = load_page_payloads(
         data=data,
         output_dir=output_dir,
@@ -239,6 +248,7 @@ def translate_book_with_global_continuations(
         skip_title_translation=skip_title_translation,
         sci_cutoff_page_idx=sci_cutoff_page_idx,
         sci_cutoff_block_idx=sci_cutoff_block_idx,
+        policy_config=policy_config,
     )
     if classified_items:
         print(f"book: classified {classified_items} items", flush=True)

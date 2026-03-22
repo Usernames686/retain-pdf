@@ -5,6 +5,8 @@ from pathlib import Path
 from translation.payload_ops import apply_translated_text_map
 from translation.payload_ops import pending_translation_items
 from translation.payload_ops import summarize_payload
+from translation.policy_config import TranslationPolicyConfig
+from translation.policy_config import build_translation_policy_config
 from translation.continuations import annotate_continuation_context
 from translation.policy_flow import apply_translation_policies
 from translation.retrying_translator import translate_batch
@@ -34,6 +36,7 @@ def translate_items_to_path(
     skip_title_translation: bool = False,
     sci_cutoff_page_idx: int | None = None,
     sci_cutoff_block_idx: int | None = None,
+    policy_config: TranslationPolicyConfig | None = None,
 ) -> dict:
     ensure_translation_template(items, translation_path, page_idx=page_idx)
 
@@ -43,6 +46,14 @@ def translate_items_to_path(
     if continuation_items:
         save_translations(translation_path, payload)
         print(f"{label}: annotated {continuation_items} continuation-context items", flush=True)
+
+    if policy_config is None:
+        policy_config = build_translation_policy_config(
+            mode=mode,
+            skip_title_translation=skip_title_translation,
+            sci_cutoff_page_idx=sci_cutoff_page_idx,
+            sci_cutoff_block_idx=sci_cutoff_block_idx,
+        )
 
     classified_items, skip_summary = apply_translation_policies(
         payload=payload,
@@ -55,19 +66,20 @@ def translate_items_to_path(
         page_idx=page_idx,
         sci_cutoff_page_idx=sci_cutoff_page_idx,
         sci_cutoff_block_idx=sci_cutoff_block_idx,
+        policy_config=policy_config,
     )
     if classified_items:
         save_translations(translation_path, payload)
         print(f"{label}: classified {classified_items} page items")
 
-    if mode == "sci":
+    if policy_config.enable_after_last_title_cutoff:
         if skip_summary["title_skipped"] or skip_summary["tail_skipped"]:
             save_translations(translation_path, payload)
             if skip_summary["title_skipped"]:
                 print(f"{label}: skipped {skip_summary['title_skipped']} title items")
             if skip_summary["tail_skipped"]:
                 print(f"{label}: skipped {skip_summary['tail_skipped']} items after the last title cutoff")
-    elif skip_title_translation:
+    elif policy_config.enable_title_skip:
         if skip_summary["title_skipped"]:
             save_translations(translation_path, payload)
             print(f"{label}: skipped {skip_summary['title_skipped']} title items")
