@@ -39,6 +39,7 @@ def normalize_formula_for_latex_math(formula_text: str) -> str:
     expr = re.sub(r"\\cal\s+([A-Za-z])", r"\\mathcal{\1}", expr)
     expr = re.sub(r"\\mathscr\b", r"\\mathcal", expr)
     expr = re.sub(r"\\Breve\b", r"\\breve", expr)
+    expr = re.sub(r"\\Vec\b", r"\\vec", expr)
     expr = re.sub(r"\\bf\b", r"\\mathbf", expr)
     expr = re.sub(r"\\pmb\b", r"\\mathbf", expr)
     expr = re.sub(r"\\rm\b", r"\\mathrm", expr)

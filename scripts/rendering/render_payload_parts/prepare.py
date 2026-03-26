@@ -8,6 +8,8 @@ from rendering.font_fit import inner_bbox
 from rendering.font_fit import page_baseline_font_size
 from rendering.render_payload_parts.metrics import block_metrics
 from rendering.render_payload_parts.metrics import box_capacity_units
+from rendering.render_payload_parts.metrics import text_demand_units
+from rendering.render_payload_parts.shared import same_meaningful_render_text
 from rendering.render_payload_parts.shared import split_protected_text_for_boxes
 
 
@@ -31,11 +33,17 @@ def prepare_render_payloads_by_page(translated_pages: dict[int, list[dict]]) -> 
             page_text_width_med,
         )
         for item in items:
-            item["render_protected_text"] = (
+            render_text = (
                 item.get("translation_unit_protected_translated_text")
                 or item.get("protected_translated_text")
                 or ""
             ).strip()
+            source_text = (
+                item.get("translation_unit_protected_source_text")
+                or item.get("protected_source_text")
+                or ""
+            ).strip()
+            item["render_protected_text"] = "" if same_meaningful_render_text(source_text, render_text) else render_text
             item["render_formula_map"] = item.get("translation_unit_formula_map") or item.get("formula_map", [])
             flat_items.append(item)
 
@@ -55,7 +63,18 @@ def prepare_render_payloads_by_page(translated_pages: dict[int, list[dict]]) -> 
             or items[0].get("group_protected_translated_text")
             or ""
         ).strip()
+        protected_unit_source_text = (
+            items[0].get("translation_unit_protected_source_text")
+            or items[0].get("group_protected_source_text")
+            or ""
+        ).strip()
+        if same_meaningful_render_text(protected_unit_source_text, protected_unit_text):
+            for item in items:
+                item["render_protected_text"] = ""
+                item["render_formula_map"] = []
+            continue
         capacities: list[float] = []
+        source_weights: list[float] = []
         for item in items:
             page_font_size, page_line_pitch, page_line_height, density_baseline, page_text_width_med = page_metrics[
                 item.get("page_idx", 0)
@@ -69,8 +88,15 @@ def prepare_render_payloads_by_page(translated_pages: dict[int, list[dict]]) -> 
                 page_text_width_med,
             )
             capacities.append(box_capacity_units(inner_bbox(item), font_size_pt, leading_em))
+            source_weights.append(
+                text_demand_units(
+                    item.get("protected_source_text") or "",
+                    item.get("formula_map", []),
+                )
+            )
 
-        chunks = split_protected_text_for_boxes(protected_unit_text, unit_formula_map, capacities)
+        split_weights = source_weights if any(weight > 0 for weight in source_weights) else capacities
+        chunks = split_protected_text_for_boxes(protected_unit_text, unit_formula_map, split_weights)
         for item, chunk in zip(items, chunks):
             item["render_protected_text"] = chunk
             item["render_formula_map"] = unit_formula_map

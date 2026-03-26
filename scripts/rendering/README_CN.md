@@ -76,6 +76,8 @@
   PDF 后处理压缩工具。
 - `math_utils.py`
   markdown、纯文本和公式格式化工具。
+- `math_casebook.py`
+  已知公式坏例库，专门记录 MinerU / OCR / Typst 转换里踩过的公式输入和期望归一化结果。
 - `models.py`
   渲染层使用的数据结构定义。
 
@@ -98,3 +100,11 @@
 ## 推荐入口
 
 日常使用不建议直接调用内部子模块，而是让上层通过 `scripts/pipeline/render_stage.py` 统一调度渲染流程。
+
+## 公式回归
+
+如果新增了一条公式归一化规则，建议同时把坏例子补到 `math_casebook.py`，然后运行：
+
+`python scripts/check_math_cases.py`
+
+这样可以快速确认旧 case 没有被新的规则打坏。

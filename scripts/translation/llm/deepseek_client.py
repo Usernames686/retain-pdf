@@ -7,11 +7,13 @@ from typing import Any
 import requests
 
 from common.prompt_loader import load_prompt
+from common.local_env import get_secret
 from translation.llm.decision_hints import build_decision_hints
 
 
 DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
 DEFAULT_API_KEY_ENV = "DEEPSEEK_API_KEY"
+DEFAULT_API_KEY_FILE = "deepseek.env"
 TRUST_ENV_PROXY_ENV = "PDF_TRANSLATOR_TRUST_ENV_PROXY"
 _THREAD_LOCAL = threading.local()
 
@@ -221,7 +223,11 @@ def translate_batch(
 
 
 def get_api_key(explicit_api_key: str = "", env_var: str = DEFAULT_API_KEY_ENV, required: bool = True) -> str:
-    api_key = explicit_api_key or os.environ.get(env_var, "")
+    api_key = get_secret(
+        explicit_value=explicit_api_key,
+        env_var=env_var,
+        env_file_name=DEFAULT_API_KEY_FILE,
+    )
     if required and not api_key:
-        raise RuntimeError(f"Missing API key. Set {env_var} or pass --api-key.")
+        raise RuntimeError(f"Missing API key. Set {env_var}, scripts/.env/{DEFAULT_API_KEY_FILE}, or pass --api-key.")
     return api_key

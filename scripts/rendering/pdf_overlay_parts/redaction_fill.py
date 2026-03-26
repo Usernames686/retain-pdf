@@ -8,6 +8,7 @@ from rendering.pdf_overlay_parts.redaction_config import (
     COVER_SAMPLE_MARGIN_PT,
     COVER_SAMPLE_SCALE,
 )
+from rendering.pdf_overlay_parts.redaction_geometry import rect_area
 
 
 def quantile(sorted_values: list[int], numerator: int, denominator: int) -> int:
@@ -18,25 +19,62 @@ def quantile(sorted_values: list[int], numerator: int, denominator: int) -> int:
     return sorted_values[index]
 
 
-def sample_local_background_fill(page: fitz.Page, rect: fitz.Rect) -> tuple[float, float, float]:
+def _background_sample_outer_rect(page: fitz.Page, rect: fitz.Rect) -> fitz.Rect | None:
     page_rect = fitz.Rect(page.rect)
-    outer = fitz.Rect(
-        rect.x0 - COVER_SAMPLE_MARGIN_PT,
-        rect.y0 - COVER_SAMPLE_MARGIN_PT,
-        rect.x1 + COVER_SAMPLE_MARGIN_PT,
-        rect.y1 + COVER_SAMPLE_MARGIN_PT,
-    ) & page_rect
+    outer = (
+        fitz.Rect(
+            rect.x0 - COVER_SAMPLE_MARGIN_PT,
+            rect.y0 - COVER_SAMPLE_MARGIN_PT,
+            rect.x1 + COVER_SAMPLE_MARGIN_PT,
+            rect.y1 + COVER_SAMPLE_MARGIN_PT,
+        )
+        & page_rect
+    )
     if outer.is_empty or outer.width <= 1 or outer.height <= 1:
-        return (1, 1, 1)
+        return None
+    return outer
 
+
+def _clip_pixmap(page: fitz.Page, clip: fitz.Rect) -> fitz.Pixmap | None:
     try:
-        pix = page.get_pixmap(
-            clip=outer,
+        return page.get_pixmap(
+            clip=clip,
             matrix=fitz.Matrix(COVER_SAMPLE_SCALE, COVER_SAMPLE_SCALE),
             colorspace=fitz.csRGB,
             alpha=False,
         )
     except Exception:
+        return None
+
+
+def _pixmap_rgb_pixels(pix: fitz.Pixmap) -> list[tuple[int, int, int]]:
+    if pix.width <= 0 or pix.height <= 0 or pix.n < 3:
+        return []
+    samples = memoryview(pix.samples)
+    stride = pix.n
+    pixels: list[tuple[int, int, int]] = []
+    for y in range(pix.height):
+        row_offset = y * pix.width * stride
+        for x in range(pix.width):
+            offset = row_offset + x * stride
+            pixels.append((samples[offset], samples[offset + 1], samples[offset + 2]))
+    return pixels
+
+
+def _brightness_spread(pixels: list[tuple[int, int, int]]) -> int:
+    if not pixels:
+        return 255
+    brightness = sorted(int((r + g + b) / 3) for r, g, b in pixels)
+    return quantile(brightness, 9, 10) - quantile(brightness, 1, 10)
+
+
+def sample_local_background_fill(page: fitz.Page, rect: fitz.Rect) -> tuple[float, float, float]:
+    outer = _background_sample_outer_rect(page, rect)
+    if outer is None:
+        return (1, 1, 1)
+
+    pix = _clip_pixmap(page, outer)
+    if pix is None:
         return (1, 1, 1)
 
     if pix.width <= 0 or pix.height <= 0 or pix.n < 3:
@@ -62,8 +100,7 @@ def sample_local_background_fill(page: fitz.Page, rect: fitz.Rect) -> tuple[floa
     if len(pixels) < COVER_MIN_SAMPLE_PIXELS:
         return (1, 1, 1)
 
-    brightness = sorted(int((r + g + b) / 3) for r, g, b in pixels)
-    spread = quantile(brightness, 9, 10) - quantile(brightness, 1, 10)
+    spread = _brightness_spread(pixels)
     if spread > COVER_COMPLEXITY_BRIGHTNESS_SPREAD:
         return (1, 1, 1)
 
@@ -88,10 +125,70 @@ def resolved_fill_color(
     return sample_local_background_fill(page, rect)
 
 
+def _patch_candidate_rects(page_rect: fitz.Rect, rect: fitz.Rect) -> list[fitz.Rect]:
+    margin = max(COVER_SAMPLE_MARGIN_PT, min(18.0, max(4.0, min(rect.width, rect.height) * 0.35)))
+    candidates = [
+        fitz.Rect(rect.x0 - margin, rect.y0, rect.x0, rect.y1),
+        fitz.Rect(rect.x1, rect.y0, rect.x1 + margin, rect.y1),
+        fitz.Rect(rect.x0, rect.y0 - margin, rect.x1, rect.y0),
+        fitz.Rect(rect.x0, rect.y1, rect.x1, rect.y1 + margin),
+    ]
+    valid: list[fitz.Rect] = []
+    for candidate in candidates:
+        clipped = candidate & page_rect
+        if clipped.is_empty or clipped.width <= 1 or clipped.height <= 1:
+            continue
+        valid.append(clipped)
+    return valid
+
+
+def cover_rect_with_background_patch(page: fitz.Page, rect: fitz.Rect) -> bool:
+    page_rect = fitz.Rect(page.rect)
+    best_pixmap: fitz.Pixmap | None = None
+    best_score: tuple[int, int, float] | None = None
+    for candidate in _patch_candidate_rects(page_rect, rect):
+        pix = _clip_pixmap(page, candidate)
+        if pix is None:
+            continue
+        pixels = _pixmap_rgb_pixels(pix)
+        if len(pixels) < COVER_MIN_SAMPLE_PIXELS:
+            continue
+        spread = _brightness_spread(pixels)
+        # Prefer low-complexity neighboring strips; large spreads usually mean
+        # nearby text or figures and make stretched patches look worse.
+        complexity_bucket = 0 if spread <= COVER_COMPLEXITY_BRIGHTNESS_SPREAD else 1
+        score = (complexity_bucket, spread, -rect_area(candidate))
+        if best_score is None or score < best_score:
+            best_score = score
+            best_pixmap = pix
+
+    if best_pixmap is None or best_score is None or best_score[0] > 0:
+        return False
+
+    try:
+        page.insert_image(rect, pixmap=best_pixmap, keep_proportion=False, overlay=True)
+    except Exception:
+        return False
+    return True
+
+
 def draw_white_covers(page: fitz.Page, rects: list[fitz.Rect]) -> None:
     if not rects:
         return
     for rect in rects:
+        fill = sample_local_background_fill(page, rect)
+        shape = page.new_shape()
+        shape.draw_rect(rect)
+        shape.finish(color=None, fill=fill)
+        shape.commit(overlay=True)
+
+
+def draw_background_covers(page: fitz.Page, rects: list[fitz.Rect]) -> None:
+    if not rects:
+        return
+    for rect in rects:
+        if cover_rect_with_background_patch(page, rect):
+            continue
         fill = sample_local_background_fill(page, rect)
         shape = page.new_shape()
         shape.draw_rect(rect)

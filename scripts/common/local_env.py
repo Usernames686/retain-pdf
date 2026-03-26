@@ -24,6 +24,19 @@ def load_env_file(env_name: str) -> dict[str, str]:
     return values
 
 
+def load_raw_secret(env_name: str) -> str:
+    path = ENV_DIR / env_name
+    if not path.exists() or not path.is_file():
+        return ""
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" in line:
+            continue
+        return line
+    return ""
+
+
 def get_secret(
     *,
     explicit_value: str = "",
@@ -35,4 +48,7 @@ def get_secret(
     file_values = load_env_file(env_file_name)
     if env_var in file_values and file_values[env_var].strip():
         return file_values[env_var].strip()
+    raw_secret = load_raw_secret(env_file_name)
+    if raw_secret:
+        return raw_secret
     return os.environ.get(env_var, "").strip()

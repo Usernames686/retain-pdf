@@ -28,6 +28,9 @@
           <span>｜</span>
           <a href="https://mineru.net/apiManage/token" target="_blank" rel="noopener noreferrer">申请 MinerU API</a>
         </p>
+        <p class="notice-links">
+          如遇 bug 或对 PDF 翻译结果不满意，可联系 <a href="mailto:wxyhgk@qq.com">wxyhgk@qq.com</a>，并附上 job_id 和页面。
+        </p>
       </section>
 
       <section class="panel-grid">
@@ -39,11 +42,11 @@
             <div class="grid two">
               <label>
                 <span>MinerU API key</span>
-                <input id="mineru_token" name="mineru_token" type="password" value="" autocomplete="off" />
+                <input id="mineru_token" name="mineru_token" type="password" value="" autocomplete="off" placeholder="留空则使用服务端默认" />
               </label>
               <label>
                 <span>DeepSeek API key</span>
-                <input id="api_key" name="api_key" type="password" value="" autocomplete="off" />
+                <input id="api_key" name="api_key" type="password" value="" autocomplete="off" placeholder="留空则使用服务端默认" />
               </label>
             </div>
 
@@ -94,6 +97,13 @@
             <div>
               <div class="label">当前提示</div>
               <div id="job-stage-detail" class="summary-text">-</div>
+            </div>
+          </div>
+
+          <div class="status-meta-row top-gap">
+            <div class="status-meta-card">
+              <div class="label">完成时间</div>
+              <div id="job-finished-at" class="status-meta-value">-</div>
             </div>
           </div>
 
@@ -166,6 +176,17 @@
               <button id="watch-btn" class="secondary" type="button">查询任务</button>
               <a id="download-btn" class="button-link disabled" href="#" target="_blank" rel="noopener noreferrer">下载结果 ZIP</a>
             </div>
+
+            <div class="status-meta-row top-gap">
+              <div class="status-meta-card">
+                <div class="label">完成时间</div>
+                <div id="query-job-finished-at" class="status-meta-value">-</div>
+              </div>
+              <div class="status-meta-card">
+                <div class="label">用时</div>
+                <div id="query-job-duration" class="status-meta-value">-</div>
+              </div>
+            </div>
           </div>
         </section>
       </section>
@@ -200,6 +221,14 @@
         <div class="advanced-body">
           <div class="grid three">
             <label>
+              <span>provider</span>
+              <select id="provider_preset" name="provider_preset">
+                <option value="deepseek" selected>DeepSeek (默认)</option>
+                <option value="local_q35">本地 Q3.5</option>
+                <option value="custom">自定义</option>
+              </select>
+            </label>
+            <label>
               <span>mode</span>
               <select id="mode" name="mode">
                 <option value="sci" selected>sci</option>
@@ -209,11 +238,11 @@
             </label>
             <label>
               <span>model</span>
-              <input id="model" name="model" type="text" value="Q3.5-turbo" />
+              <input id="model" name="model" type="text" value="deepseek-chat" />
             </label>
             <label>
               <span>base_url</span>
-              <input id="base_url" name="base_url" type="text" value="http://1.94.67.196:10001/v1" />
+              <input id="base_url" name="base_url" type="text" value="https://api.deepseek.com/v1" />
             </label>
             <label>
               <span>API Base</span>
@@ -224,7 +253,7 @@
           <div class="grid three">
             <label>
               <span>workers</span>
-              <input id="workers" name="workers" type="number" min="0" value="0" />
+              <input id="workers" name="workers" type="number" min="0" value="50" />
             </label>
             <label>
               <span>batch_size</span>

@@ -12,6 +12,7 @@ from rendering.pdf_overlay import strip_page_links
 from rendering.render_payloads import prepare_render_payloads_by_page
 from rendering.typst_renderer.compiler import compile_typst_book_overlay_pdf
 from rendering.typst_renderer.sanitize import compile_overlay_pdf_resilient
+from rendering.typst_renderer.sanitize import sanitize_page_specs_for_typst_book_overlay
 from rendering.typst_renderer.shared import default_compile_workers
 from rendering.typst_renderer.shared import prepare_typst_work_dir
 
@@ -197,16 +198,49 @@ def overlay_translated_pages_on_doc(
             overlay_pdf,
             cover_only=cover_only,
         )
-    except RuntimeError:
-        print("typst book compile failed; falling back to per-page compilation")
-        _overlay_pages_via_page_fallback(
-            doc,
-            ordered_page_indices,
-            page_specs,
-            translated_pages,
-            compile_workers=compile_workers,
+        return
+    except RuntimeError as exc:
+        print("typst book compile failed; sanitizing pages before per-page fallback", flush=True)
+        print(str(exc), flush=True)
+
+    sanitized_page_specs = sanitize_page_specs_for_typst_book_overlay(
+        page_specs,
+        font_family=font_family,
+        font_paths=font_paths,
+        work_dir=(temp_root or paths.OUTPUT_DIR) / "book-sanitize",
+    )
+    sanitized_book_specs = [
+        (page_width, page_height, items) for _, page_width, page_height, items, _ in sanitized_page_specs
+    ]
+    sanitized_translated_pages = {page_idx: items for page_idx, _w, _h, items, _stem in sanitized_page_specs}
+    try:
+        overlay_pdf = _compile_book_overlay_with_fallback(
+            sanitized_book_specs,
+            stem=stem,
             font_family=font_family,
             font_paths=font_paths,
             temp_root=temp_root,
+        )
+        _overlay_pages_from_single_pdf(
+            doc,
+            ordered_page_indices,
+            sanitized_translated_pages,
+            overlay_pdf,
             cover_only=cover_only,
         )
+        return
+    except RuntimeError as exc:
+        print("typst sanitized book compile failed; falling back to per-page compilation", flush=True)
+        print(str(exc), flush=True)
+
+    _overlay_pages_via_page_fallback(
+        doc,
+        ordered_page_indices,
+        sanitized_page_specs,
+        sanitized_translated_pages,
+        compile_workers=compile_workers,
+        font_family=font_family,
+        font_paths=font_paths,
+        temp_root=temp_root,
+        cover_only=cover_only,
+    )

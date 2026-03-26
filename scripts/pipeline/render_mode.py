@@ -65,11 +65,15 @@ def resolve_effective_render_mode(
         total_pages = len(doc)
         sample_stop = total_pages - 1 if end_page < 0 else min(end_page, total_pages - 1)
         editable = is_editable_pdf(doc, start_page, sample_stop)
-        if editable and source_pdf_has_vector_graphics(
+        vector_heavy = source_pdf_has_vector_graphics(
             source_pdf_path,
             start_page=start_page,
             end_page=sample_stop,
-        ):
+        )
+        if not editable:
+            print("auto render mode selected: overlay (non-editable PDF; white-cover/redaction route)")
+            return "overlay"
+        if vector_heavy:
             print("auto render mode selected: overlay (editable vector-heavy PDF; cover-only redaction)")
             return "overlay"
 

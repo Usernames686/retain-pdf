@@ -4,6 +4,7 @@ import fitz
 
 from rendering.pdf_overlay_parts.redaction_config import (
     HEAVY_VECTOR_PAGE_DRAWINGS_THRESHOLD,
+    VECTOR_HEAVY_PAGE_DRAWINGS_THRESHOLD,
     LOCAL_VECTOR_ITEM_AREA_RATIO_THRESHOLD,
     LOCAL_VECTOR_ITEM_DRAWINGS_THRESHOLD,
     MATH_INTRUSIVE_HEIGHT_RATIO,
@@ -12,9 +13,8 @@ from rendering.pdf_overlay_parts.redaction_config import (
 )
 from rendering.pdf_overlay_parts.redaction_geometry import (
     clip_rect,
-    expand_formula_rect,
+    expand_item_rect,
     expand_word_rect,
-    merge_dedup_rects,
     rect_area,
     rect_intersects_protected,
     rect_key,
@@ -154,67 +154,9 @@ def word_entries_to_redaction_rects(entries: list[tuple[fitz.Rect, str]]) -> lis
     return rects
 
 
-def item_text_span_redaction_rects(item: dict) -> list[fitz.Rect]:
-    rects: list[fitz.Rect] = []
-    seen: set[tuple[int, int, int, int]] = set()
-    for line in item.get("lines", []) or []:
-        for span in line.get("spans", []) or []:
-            if str(span.get("type", "")).strip() != "text":
-                continue
-            bbox = span.get("bbox", [])
-            content = str(span.get("content", "")).strip()
-            if len(bbox) != 4 or not content:
-                continue
-            rect = expand_word_rect(fitz.Rect(bbox))
-            key = rect_key(rect)
-            if key in seen:
-                continue
-            seen.add(key)
-            rects.append(rect)
-    return rects
-
-
-def item_line_redaction_rects(item: dict) -> list[fitz.Rect]:
-    rects: list[fitz.Rect] = []
-    seen: set[tuple[int, int, int, int]] = set()
-    for line in item.get("lines", []) or []:
-        bbox = line.get("bbox", [])
-        if len(bbox) != 4:
-            continue
-        rect = expand_word_rect(fitz.Rect(bbox))
-        key = rect_key(rect)
-        if key in seen:
-            continue
-        seen.add(key)
-        rects.append(rect)
-    return rects
-
-
-def item_formula_span_redaction_rects(
-    item: dict,
-    special_math_rects: list[fitz.Rect],
-) -> list[fitz.Rect]:
-    if not special_math_rects:
-        return []
-
-    rects: list[fitz.Rect] = []
-    seen: set[tuple[int, int, int, int]] = set()
-    for line in item.get("lines", []) or []:
-        for span in line.get("spans", []) or []:
-            if str(span.get("type", "")).strip() != "inline_equation":
-                continue
-            bbox = span.get("bbox", [])
-            if len(bbox) != 4:
-                continue
-            rect = expand_formula_rect(fitz.Rect(bbox))
-            if not rect_intersects_protected(rect, special_math_rects):
-                continue
-            key = rect_key(rect)
-            if key in seen:
-                continue
-            seen.add(key)
-            rects.append(rect)
-    return rects
+def item_bbox_redaction_rect(rect: fitz.Rect) -> list[fitz.Rect]:
+    expanded = expand_item_rect(rect)
+    return [expanded] if not expanded.is_empty else []
 
 
 def collect_page_drawing_rects(page: fitz.Page) -> list[fitz.Rect]:
@@ -238,6 +180,34 @@ def collect_page_drawing_rects(page: fitz.Page) -> list[fitz.Rect]:
     return rects
 
 
+def page_has_large_background_image(
+    page: fitz.Page,
+    *,
+    coverage_ratio_threshold: float = 0.75,
+) -> bool:
+    page_area = max(rect_area(page.rect), 1.0)
+    try:
+        images = page.get_images(full=True)
+    except Exception:
+        return False
+
+    for image in images:
+        if not image:
+            continue
+        xref = image[0]
+        try:
+            rects = page.get_image_rects(xref)
+        except Exception:
+            continue
+        for rect in rects:
+            if rect.is_empty:
+                continue
+            coverage_ratio = rect_area(rect & page.rect) / page_area
+            if coverage_ratio >= coverage_ratio_threshold:
+                return True
+    return False
+
+
 def item_vector_overlap_stats(rect: fitz.Rect, drawing_rects: list[fitz.Rect]) -> tuple[int, float]:
     if not drawing_rects or rect.is_empty:
         return 0, 0.0
@@ -257,6 +227,10 @@ def item_vector_overlap_stats(rect: fitz.Rect, drawing_rects: list[fitz.Rect]) -
 
 def page_should_use_cover_only(drawing_rects: list[fitz.Rect]) -> bool:
     return len(drawing_rects) >= HEAVY_VECTOR_PAGE_DRAWINGS_THRESHOLD
+
+
+def page_is_vector_heavy(drawing_rects: list[fitz.Rect]) -> bool:
+    return len(drawing_rects) >= VECTOR_HEAVY_PAGE_DRAWINGS_THRESHOLD
 
 
 def item_should_use_cover_only(rect: fitz.Rect, drawing_rects: list[fitz.Rect]) -> bool:
@@ -288,9 +262,6 @@ def item_removable_text_rects(
     special_math_rects: list[fitz.Rect] | None = None,
 ) -> list[fitz.Rect]:
     source_text = (item.get("source_text") or item.get("protected_source_text") or "").strip()
-    has_formula = item_has_formula(item)
-    formula_safe_rects = item_line_redaction_rects(item) if has_formula else []
-    formula_span_rects = item_formula_span_redaction_rects(item, special_math_rects or []) if has_formula else []
     if not source_text:
         return []
 
@@ -308,7 +279,7 @@ def item_removable_text_rects(
     if not source_words:
         if len(pdf_words) < 2:
             return []
-        return formula_safe_rects if formula_safe_rects else word_entries_to_redaction_rects(word_entries)
+        return item_bbox_redaction_rect(rect)
 
     pdf_word_set = set(pdf_words)
     source_word_set = set(source_words)
@@ -324,6 +295,4 @@ def item_removable_text_rects(
 
     if not passed:
         return []
-    if formula_safe_rects or formula_span_rects:
-        return merge_dedup_rects(formula_safe_rects, formula_span_rects)
-    return word_entries_to_redaction_rects(word_entries)
+    return item_bbox_redaction_rect(rect)

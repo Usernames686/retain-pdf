@@ -38,6 +38,7 @@ def _unit_source_text(item: dict) -> str:
     return (
         item.get("translation_unit_protected_source_text")
         or item.get("protected_source_text")
+        or item.get("source_text")
         or ""
     )
 

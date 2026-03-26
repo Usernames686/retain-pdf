@@ -27,6 +27,19 @@ const BUILTIN_RULE_PROFILES = [
   { name: "computational_chemistry", label: "computational_chemistry" },
 ];
 
+const PROVIDER_PRESETS = {
+  deepseek: {
+    model: "deepseek-chat",
+    base_url: "https://api.deepseek.com/v1",
+    workers: "50",
+  },
+  local_q35: {
+    model: "Q3.5-turbo",
+    base_url: "http://1.94.67.196:10001/v1",
+    workers: "4",
+  },
+};
+
 function apiBase() {
   return $("api-base").value.trim().replace(/\/$/, "");
 }
@@ -34,6 +47,25 @@ function apiBase() {
 function defaultApiBase() {
   const host = window.location.hostname || "127.0.0.1";
   return `http://${host}:40000`;
+}
+
+function applyProviderPreset(presetName, { force = false } = {}) {
+  const preset = PROVIDER_PRESETS[presetName];
+  if (!preset) {
+    return;
+  }
+  const modelInput = $("model");
+  const baseUrlInput = $("base_url");
+  const workersInput = $("workers");
+  if (force || !modelInput.value.trim()) {
+    modelInput.value = preset.model;
+  }
+  if (force || !baseUrlInput.value.trim()) {
+    baseUrlInput.value = preset.base_url;
+  }
+  if (force || !workersInput.value.trim() || workersInput.value === "0") {
+    workersInput.value = preset.workers;
+  }
 }
 
 function setStatus(status) {
@@ -127,6 +159,64 @@ function summarizePublicError(payload) {
   return "-";
 }
 
+function isTerminalStatus(status) {
+  return status === "succeeded" || status === "failed";
+}
+
+function formatJobFinishedAt(payload) {
+  if (!payload || !isTerminalStatus(payload.status)) {
+    return "-";
+  }
+  const rawValue = (payload.finished_at || payload.updated_at || "").trim();
+  if (!rawValue) {
+    return "-";
+  }
+
+  const parsed = new Date(rawValue);
+  if (Number.isNaN(parsed.getTime())) {
+    return rawValue;
+  }
+
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(parsed);
+}
+
+function formatJobDuration(payload) {
+  if (!payload || !isTerminalStatus(payload.status)) {
+    return "-";
+  }
+  const startedRaw = (payload.started_at || "").trim();
+  const finishedRaw = (payload.finished_at || payload.updated_at || "").trim();
+  if (!startedRaw || !finishedRaw) {
+    return "-";
+  }
+
+  const startedAt = new Date(startedRaw);
+  const finishedAt = new Date(finishedRaw);
+  if (Number.isNaN(startedAt.getTime()) || Number.isNaN(finishedAt.getTime())) {
+    return "-";
+  }
+
+  const totalSeconds = Math.max(0, Math.round((finishedAt.getTime() - startedAt.getTime()) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}小时 ${minutes}分 ${seconds}秒`;
+  }
+  if (minutes > 0) {
+    return `${minutes}分 ${seconds}秒`;
+  }
+  return `${seconds}秒`;
+}
+
 function setDownloadLink(jobId, enabled) {
   const el = $("download-btn");
   el.href = enabled && jobId ? `${apiBase()}/v1/jobs/${jobId}/download` : "#";
@@ -206,6 +296,9 @@ function renderJob(payload) {
   $("job-stage-raw-detail").textContent = payload.stage_detail || "-";
   $("job-summary").textContent = summarizeStatus(payload.status || "idle");
   $("job-stage-detail").textContent = summarizeStageDetail(payload);
+  $("job-finished-at").textContent = formatJobFinishedAt(payload);
+  $("query-job-finished-at").textContent = formatJobFinishedAt(payload);
+  $("query-job-duration").textContent = formatJobDuration(payload);
   $("job-id-input").value = payload.job_id || "";
   setStatus(payload.status || "idle");
   setLinearProgress(
@@ -393,6 +486,9 @@ async function submitForm(event) {
     setStatus(payload.status || "queued");
     $("job-summary").textContent = summarizeStatus(payload.status || "queued");
     $("job-stage-detail").textContent = payload.status === "queued" ? "任务已提交，等待后端开始处理。" : "-";
+    $("job-finished-at").textContent = "-";
+    $("query-job-finished-at").textContent = "-";
+    $("query-job-duration").textContent = "-";
     $("raw-json").textContent = JSON.stringify(redactSensitive(safeJsonClone(payload)), null, 2);
     setDownloadLink(payload.job_id, false);
     startPolling(payload.job_id);
@@ -479,9 +575,17 @@ document.addEventListener("DOMContentLoaded", () => {
   if (!$("api-base").value.trim()) {
     $("api-base").value = defaultApiBase();
   }
+  applyProviderPreset($("provider_preset").value, { force: true });
   $("file").addEventListener("change", handleFileSelected);
   $("developer-btn").addEventListener("click", openDeveloperAccess);
   $("developer-auth-submit-btn").addEventListener("click", submitDeveloperPassword);
+  $("provider_preset").addEventListener("change", (event) => {
+    const value = event.target.value;
+    if (value === "custom") {
+      return;
+    }
+    applyProviderPreset(value, { force: true });
+  });
   $("developer-password").addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       event.preventDefault();
@@ -496,6 +600,8 @@ document.addEventListener("DOMContentLoaded", () => {
   setLinearProgress("job-progress-bar", "job-progress-text", NaN, NaN, "-");
   $("job-summary").textContent = summarizeStatus("idle");
   $("job-stage-detail").textContent = "-";
+  $("query-job-finished-at").textContent = "-";
+  $("query-job-duration").textContent = "-";
   resetUploadProgress();
   resetUploadedFile();
   updateDeveloperVisibility();

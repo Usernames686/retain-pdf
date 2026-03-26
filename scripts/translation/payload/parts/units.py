@@ -17,13 +17,24 @@ def _build_group_translation_unit(unit_id: str, items: list[dict]) -> dict | Non
         local_map = item.get("formula_map", [])
         remapped_source = source
         remapped_formulas = []
-        for entry in local_map:
+        placeholder_mapping: dict[str, str] = {}
+        temporary_mapping: dict[str, str] = {}
+        for local_index, entry in enumerate(local_map, start=1):
+            old_placeholder = entry["placeholder"]
+            temp_placeholder = f"[[GROUP_TMP_{unit_id}_{local_index}]]"
             new_placeholder = f"[[FORMULA_{next_formula_index}]]"
             next_formula_index += 1
-            remapped_source = remapped_source.replace(entry["placeholder"], new_placeholder)
+            placeholder_mapping[old_placeholder] = new_placeholder
+            temporary_mapping[old_placeholder] = temp_placeholder
+            remapped_source = remapped_source.replace(old_placeholder, temp_placeholder)
+
+        for old_placeholder, temp_placeholder in temporary_mapping.items():
+            remapped_source = remapped_source.replace(temp_placeholder, placeholder_mapping[old_placeholder])
+
+        for entry in local_map:
             remapped_formulas.append(
                 {
-                    "placeholder": new_placeholder,
+                    "placeholder": placeholder_mapping[entry["placeholder"]],
                     "formula_text": entry["formula_text"],
                 }
             )

@@ -27,6 +27,8 @@ def build_single_page_typst_pdf(
     temp_root: Path | None = None,
     cover_only: bool = False,
 ) -> None:
+    prepared_pages = prepare_render_payloads_by_page({page_idx: translated_items})
+    prepared_items = prepared_pages.get(page_idx, translated_items)
     source_doc = fitz.open(source_pdf_path)
     temp_doc = fitz.open()
     temp_doc.insert_pdf(source_doc, from_page=page_idx, to_page=page_idx)
@@ -34,7 +36,7 @@ def build_single_page_typst_pdf(
     strip_page_links(page)
     overlay_translated_items_on_page(
         page,
-        translated_items,
+        prepared_items,
         stem=f"page-{page_idx + 1}",
         font_family=font_family,
         font_paths=font_paths,

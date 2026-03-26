@@ -37,6 +37,14 @@ def strip_formula_placeholders(text: str) -> str:
     return re.sub(r"\[\[FORMULA_\d+]]", " ", text or "")
 
 
+def normalize_render_text(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip())
+
+
+def same_meaningful_render_text(source_text: str, translated_text: str) -> bool:
+    return normalize_render_text(source_text) == normalize_render_text(translated_text)
+
+
 def source_word_count(item: dict) -> int:
     source_text = item.get("protected_source_text") or item.get("source_text") or ""
     plain = strip_formula_placeholders(source_text)
@@ -78,6 +86,10 @@ def trim_joined_tokens(tokens: list[str]) -> str:
     return "".join(tokens).strip()
 
 
+def _is_good_split_candidate(text: str) -> bool:
+    return text.endswith((".", "。", "!", "！", "?", "？", ";", "；", ":", "：", ",", "，"))
+
+
 def split_protected_text_for_boxes(protected_text: str, formula_map: list[dict], capacities: list[float]) -> list[str]:
     if len(capacities) <= 1:
         return [protected_text.strip()]
@@ -109,14 +121,35 @@ def split_protected_text_for_boxes(protected_text: str, formula_map: list[dict],
             end += 1
             if running_cost >= target_cost:
                 best_end = end
-                lookahead = min(len(tokens), end + 12)
-                probe = end
-                while probe < lookahead:
-                    probe += 1
+                backward_start = max(cursor + 1, end - 12)
+                backward_candidate = None
+                backward_cost = None
+                for probe in range(end, backward_start - 1, -1):
                     candidate = trim_joined_tokens(tokens[cursor:probe])
-                    if candidate.endswith((".", "。", "!", "！", "?", "？", ";", "；", ":", "：", ",", "，")):
-                        best_end = probe
+                    if _is_good_split_candidate(candidate):
+                        backward_candidate = probe
+                        backward_cost = sum(token_costs[cursor:probe])
                         break
+
+                forward_candidate = None
+                forward_cost = None
+                lookahead = min(len(tokens), end + 12)
+                for probe in range(end + 1, lookahead + 1):
+                    candidate = trim_joined_tokens(tokens[cursor:probe])
+                    if _is_good_split_candidate(candidate):
+                        forward_candidate = probe
+                        forward_cost = sum(token_costs[cursor:probe])
+                        break
+
+                if backward_candidate is not None and forward_candidate is not None:
+                    if abs(backward_cost - target_cost) <= abs(forward_cost - target_cost):
+                        best_end = backward_candidate
+                    else:
+                        best_end = forward_candidate
+                elif backward_candidate is not None:
+                    best_end = backward_candidate
+                elif forward_candidate is not None:
+                    best_end = forward_candidate
                 break
         if best_end == cursor:
             best_end = min(len(tokens), max(cursor + 1, end))
