@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import fitz
 
 from rendering.pdf_overlay_parts.redaction_config import (
@@ -9,6 +11,13 @@ from rendering.pdf_overlay_parts.redaction_config import (
     COVER_SAMPLE_SCALE,
 )
 from rendering.pdf_overlay_parts.redaction_geometry import rect_area
+
+
+@dataclass
+class PreparedBackgroundCover:
+    rect: fitz.Rect
+    pixmap: fitz.Pixmap | None = None
+    fill: tuple[float, float, float] | None = None
 
 
 def quantile(sorted_values: list[int], numerator: int, denominator: int) -> int:
@@ -143,6 +152,14 @@ def _patch_candidate_rects(page_rect: fitz.Rect, rect: fitz.Rect) -> list[fitz.R
 
 
 def cover_rect_with_background_patch(page: fitz.Page, rect: fitz.Rect) -> bool:
+    prepared = prepare_background_cover(page, rect)
+    if prepared is None:
+        return False
+    apply_prepared_background_cover(page, prepared)
+    return True
+
+
+def prepare_background_cover(page: fitz.Page, rect: fitz.Rect) -> PreparedBackgroundCover | None:
     page_rect = fitz.Rect(page.rect)
     best_pixmap: fitz.Pixmap | None = None
     best_score: tuple[int, int, float] | None = None
@@ -162,14 +179,52 @@ def cover_rect_with_background_patch(page: fitz.Page, rect: fitz.Rect) -> bool:
             best_score = score
             best_pixmap = pix
 
-    if best_pixmap is None or best_score is None or best_score[0] > 0:
-        return False
+    if best_pixmap is not None and best_score is not None and best_score[0] <= 0:
+        return PreparedBackgroundCover(rect=fitz.Rect(rect), pixmap=best_pixmap)
 
-    try:
-        page.insert_image(rect, pixmap=best_pixmap, keep_proportion=False, overlay=True)
-    except Exception:
-        return False
-    return True
+    return PreparedBackgroundCover(
+        rect=fitz.Rect(rect),
+        fill=sample_local_background_fill(page, rect),
+    )
+
+
+def apply_prepared_background_cover(page: fitz.Page, cover: PreparedBackgroundCover) -> None:
+    if cover.pixmap is not None:
+        try:
+            page.insert_image(cover.rect, pixmap=cover.pixmap, keep_proportion=False, overlay=True)
+            return
+        except Exception:
+            pass
+
+    fill = cover.fill or sample_local_background_fill(page, cover.rect)
+    shape = page.new_shape()
+    shape.draw_rect(cover.rect)
+    shape.finish(color=None, fill=fill)
+    shape.commit(overlay=True)
+
+
+def prepare_background_covers(
+    page: fitz.Page,
+    rects: list[fitz.Rect],
+) -> list[PreparedBackgroundCover]:
+    covers: list[PreparedBackgroundCover] = []
+    for rect in rects:
+        prepared = prepare_background_cover(page, rect)
+        if prepared is None:
+            prepared = PreparedBackgroundCover(
+                rect=fitz.Rect(rect),
+                fill=sample_local_background_fill(page, rect),
+            )
+        covers.append(prepared)
+    return covers
+
+
+def apply_prepared_background_covers(
+    page: fitz.Page,
+    covers: list[PreparedBackgroundCover],
+) -> None:
+    for cover in covers:
+        apply_prepared_background_cover(page, cover)
 
 
 def draw_white_covers(page: fitz.Page, rects: list[fitz.Rect]) -> None:
@@ -187,10 +242,8 @@ def draw_background_covers(page: fitz.Page, rects: list[fitz.Rect]) -> None:
     if not rects:
         return
     for rect in rects:
-        if cover_rect_with_background_patch(page, rect):
-            continue
-        fill = sample_local_background_fill(page, rect)
-        shape = page.new_shape()
-        shape.draw_rect(rect)
-        shape.finish(color=None, fill=fill)
-        shape.commit(overlay=True)
+        apply_prepared_background_cover(
+            page,
+            prepare_background_cover(page, rect)
+            or PreparedBackgroundCover(rect=fitz.Rect(rect), fill=sample_local_background_fill(page, rect)),
+        )

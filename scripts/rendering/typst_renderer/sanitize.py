@@ -10,9 +10,7 @@ from rendering.typst_renderer.shared import TYPST_OVERLAY_DIR
 from rendering.typst_renderer.shared import force_plain_text_item_at_index
 from rendering.typst_renderer.shared import force_plain_text_items
 from rendering.typst_renderer.shared import strip_formula_commands_for_item_at_index
-from translation.llm.deepseek_client import DEFAULT_BASE_URL
 from translation.llm.deepseek_client import extract_json_text
-from translation.llm.deepseek_client import get_api_key
 from translation.llm.deepseek_client import request_chat_content
 
 
@@ -57,10 +55,38 @@ def _apply_formula_map(item: dict, formula_map: list[dict]) -> dict:
     return cloned
 
 
-def _repair_item_with_llm_for_typst(item: dict, *, request_label: str) -> dict:
-    api_key = get_api_key(required=False)
-    if not api_key or not _typst_repair_enabled():
+def _resolve_typst_repair_request(
+    *,
+    api_key: str,
+    model: str,
+    base_url: str,
+) -> tuple[str, str, str] | None:
+    if not _typst_repair_enabled():
+        return None
+    resolved_api_key = (api_key or "").strip()
+    resolved_model = (os.environ.get(TYPST_REPAIR_MODEL_ENV, model) or "").strip()
+    resolved_base_url = (os.environ.get(TYPST_REPAIR_BASE_URL_ENV, base_url) or "").strip()
+    if not (resolved_api_key and resolved_model and resolved_base_url):
+        return None
+    return resolved_api_key, resolved_model, resolved_base_url
+
+
+def _repair_item_with_llm_for_typst(
+    item: dict,
+    *,
+    request_label: str,
+    api_key: str,
+    model: str,
+    base_url: str,
+) -> dict:
+    repair_request = _resolve_typst_repair_request(
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
+    )
+    if repair_request is None:
         return item
+    repair_api_key, repair_model, repair_base_url = repair_request
 
     protected_text = _item_render_text(item)
     formula_map = _item_formula_map(item)
@@ -99,9 +125,9 @@ def _repair_item_with_llm_for_typst(item: dict, *, request_label: str) -> dict:
     try:
         content = request_chat_content(
             messages,
-            api_key=api_key,
-            model=os.environ.get(TYPST_REPAIR_MODEL_ENV, "deepseek-chat").strip() or "deepseek-chat",
-            base_url=os.environ.get(TYPST_REPAIR_BASE_URL_ENV, DEFAULT_BASE_URL).strip() or DEFAULT_BASE_URL,
+            api_key=repair_api_key,
+            model=repair_model,
+            base_url=repair_base_url,
             temperature=0.0,
             response_format={"type": "json_object"},
             timeout=60,
@@ -156,6 +182,9 @@ def _repair_items_with_llm_for_typst(
     bad_indices: list[int],
     *,
     stem: str,
+    api_key: str,
+    model: str,
+    base_url: str,
 ) -> list[dict]:
     patched: list[dict] = []
     bad_index_set = set(bad_indices)
@@ -167,6 +196,9 @@ def _repair_items_with_llm_for_typst(
             _repair_item_with_llm_for_typst(
                 item,
                 request_label=f"typst-llm-repair {stem} {item.get('item_id', index)}",
+                api_key=api_key,
+                model=model,
+                base_url=base_url,
             )
         )
     return patched
@@ -177,6 +209,9 @@ def sanitize_items_for_typst_compile(
     page_height: float,
     translated_items: list[dict],
     stem: str,
+    api_key: str = "",
+    model: str = "",
+    base_url: str = "",
     font_family: str = fonts.TYPST_DEFAULT_FONT_FAMILY,
     font_paths: list[Path] | None = None,
     work_dir: Path | None = None,
@@ -232,6 +267,9 @@ def sanitize_items_for_typst_compile(
                 patched_items,
                 bad_indices,
                 stem=stem,
+                api_key=api_key,
+                model=model,
+                base_url=base_url,
             )
             if llm_patched_items != patched_items:
                 try:
@@ -285,6 +323,9 @@ def compile_overlay_pdf_resilient(
     page_height: float,
     translated_items: list[dict],
     stem: str,
+    api_key: str = "",
+    model: str = "",
+    base_url: str = "",
     font_family: str = fonts.TYPST_DEFAULT_FONT_FAMILY,
     font_paths: list[Path] | None = None,
     work_dir: Path | None = None,
@@ -295,6 +336,9 @@ def compile_overlay_pdf_resilient(
         page_height,
         translated_items,
         stem=stem,
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
         font_family=font_family,
         font_paths=font_paths,
         work_dir=work_dir,
@@ -313,6 +357,9 @@ def compile_overlay_pdf_resilient(
 def sanitize_page_specs_for_typst_book_background(
     page_specs: list[tuple[int, float, float, list[dict]]],
     stem: str,
+    api_key: str = "",
+    model: str = "",
+    base_url: str = "",
     font_family: str = fonts.TYPST_DEFAULT_FONT_FAMILY,
     font_paths: list[Path] | None = None,
     work_dir: Path | None = None,
@@ -325,6 +372,9 @@ def sanitize_page_specs_for_typst_book_background(
             page_height,
             translated_items,
             stem=f"{stem}-page-{page_index:03d}",
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
             font_family=font_family,
             font_paths=font_paths,
             work_dir=work_dir,
@@ -335,6 +385,9 @@ def sanitize_page_specs_for_typst_book_background(
 
 def sanitize_page_specs_for_typst_book_overlay(
     page_specs: list[tuple[int, float, float, list[dict], str]],
+    api_key: str = "",
+    model: str = "",
+    base_url: str = "",
     font_family: str = fonts.TYPST_DEFAULT_FONT_FAMILY,
     font_paths: list[Path] | None = None,
     work_dir: Path | None = None,
@@ -347,6 +400,9 @@ def sanitize_page_specs_for_typst_book_overlay(
             page_height,
             translated_items,
             stem=page_stem,
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
             font_family=font_family,
             font_paths=font_paths,
             work_dir=work_dir / "page-overlays" / page_stem,

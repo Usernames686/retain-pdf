@@ -68,6 +68,9 @@ def build_book_from_translations(
     compile_workers: int | None = None,
     extract_selected_pages: bool = False,
     render_mode: str = "typst",
+    api_key: str = "",
+    model: str = "",
+    base_url: str = "",
     typst_font_family: str = fonts.TYPST_DEFAULT_FONT_FAMILY,
     pdf_compress_dpi: int = runtime.DEFAULT_PDF_COMPRESS_DPI,
 ) -> int:
@@ -84,6 +87,9 @@ def build_book_from_translations(
             start_page=start,
             end_page=stop,
             compile_workers=compile_workers,
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
             font_family=typst_font_family,
             cover_only=False,
         )
@@ -105,6 +111,9 @@ def build_book_from_translations(
             output_pdf_path=output_pdf_path,
             translated_pages=selected_pages,
             compile_workers=compile_workers,
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
             font_family=typst_font_family,
             cover_only=False,
         )
@@ -124,6 +133,9 @@ def build_book_from_translations(
             source_pdf_path=source_pdf_path,
             output_pdf_path=output_pdf_path,
             translated_pages=selected_pages,
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
             font_family=typst_font_family,
         )
         compress_pdf_with_ghostscript(
@@ -150,6 +162,9 @@ def build_book_from_translations(
                 remapped_pages,
                 stem="book-overlay",
                 compile_workers=compile_workers,
+                api_key=api_key,
+                model=model,
+                base_url=base_url,
                 font_family=typst_font_family,
                 temp_root=default_typst_temp_root(output_pdf_path),
                 cover_only=False,
@@ -173,6 +188,9 @@ def build_book_from_translations(
         output_pdf_path=output_pdf_path,
         translated_pages=selected_pages,
         compile_workers=compile_workers,
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
         font_family=typst_font_family,
         cover_only=False,
     )
@@ -197,6 +215,9 @@ def build_book_pipeline(
     compile_workers: int | None = None,
     extract_selected_pages: bool = False,
     render_mode: str = "typst",
+    api_key: str = "",
+    model: str = "",
+    base_url: str = "",
     typst_font_family: str = fonts.TYPST_DEFAULT_FONT_FAMILY,
     pdf_compress_dpi: int = runtime.DEFAULT_PDF_COMPRESS_DPI,
 ) -> dict:
@@ -209,6 +230,9 @@ def build_book_pipeline(
         compile_workers=compile_workers,
         extract_selected_pages=extract_selected_pages,
         render_mode=render_mode,
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
         typst_font_family=typst_font_family,
         pdf_compress_dpi=pdf_compress_dpi,
     )
@@ -230,6 +254,9 @@ def run_render_stage(
     translated_pages_map: dict[int, list[dict]] | None = None,
     compile_workers: int | None = None,
     extract_selected_pages: bool = False,
+    api_key: str = "",
+    model: str = "",
+    base_url: str = "",
     typst_font_family: str = fonts.TYPST_DEFAULT_FONT_FAMILY,
     pdf_compress_dpi: int = runtime.DEFAULT_PDF_COMPRESS_DPI,
 ) -> dict:
@@ -252,6 +279,9 @@ def run_render_stage(
         compile_workers=compile_workers,
         extract_selected_pages=extract_selected_pages,
         render_mode=effective_render_mode,
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
         typst_font_family=typst_font_family,
         pdf_compress_dpi=pdf_compress_dpi,
     )

@@ -70,6 +70,9 @@ def run_book_pipeline(
         translated_pages_map=translation_summary["translated_pages_map"],
         compile_workers=compile_workers,
         extract_selected_pages=False,
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
         typst_font_family=typst_font_family,
         pdf_compress_dpi=pdf_compress_dpi,
     )

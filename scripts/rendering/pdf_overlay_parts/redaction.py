@@ -11,7 +11,9 @@ from rendering.pdf_overlay_parts.redaction_analysis import (
     page_should_use_cover_only,
 )
 from rendering.pdf_overlay_parts.redaction_fill import (
+    apply_prepared_background_covers,
     draw_background_covers,
+    prepare_background_covers,
     draw_white_covers,
     resolved_fill_color,
 )
@@ -34,7 +36,7 @@ def redact_translated_text_areas(
 
     if page_has_large_background_image(page):
         rects = [rect for rect, _item, _translated_text in valid_items]
-        draw_background_covers(page, rects)
+        prepared_covers = prepare_background_covers(page, rects)
         for rect in rects:
             page.add_redact_annot(rect, fill=False)
         page.apply_redactions(
@@ -42,6 +44,7 @@ def redact_translated_text_areas(
             graphics=fitz.PDF_REDACT_LINE_ART_REMOVE_IF_TOUCHED,
             text=fitz.PDF_REDACT_TEXT_REMOVE,
         )
+        apply_prepared_background_covers(page, prepared_covers)
         return
 
     drawing_rects = collect_page_drawing_rects(page)
