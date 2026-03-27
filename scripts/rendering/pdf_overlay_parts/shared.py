@@ -8,9 +8,10 @@ WORD_RE = re.compile(r"[A-Za-z0-9]+(?:[-./][A-Za-z0-9]+)*|[\u4e00-\u9fff]+")
 
 
 def get_item_translated_text(item: dict) -> str:
+    if "render_protected_text" in item:
+        return str(item.get("render_protected_text", "") or "").strip()
     return (
-        item.get("render_protected_text")
-        or item.get("translation_unit_translated_text")
+        item.get("translation_unit_translated_text")
         or item.get("group_translated_text")
         or item.get("translated_text")
         or ""

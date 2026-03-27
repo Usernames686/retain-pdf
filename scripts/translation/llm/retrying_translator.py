@@ -9,6 +9,7 @@ from .deepseek_client import build_single_item_fallback_messages
 from .deepseek_client import extract_json_text
 from .deepseek_client import extract_single_item_translation_text
 from .deepseek_client import request_chat_content
+from translation.policy.metadata_filter import looks_like_url_fragment
 from translation.policy.metadata_filter import should_skip_metadata_fragment
 
 
@@ -41,9 +42,10 @@ def _normalize_decision(value: str) -> str:
 
 
 def _result_entry(decision: str, translated_text: str) -> dict[str, str]:
+    normalized_decision = _normalize_decision(decision)
     return {
-        "decision": _normalize_decision(decision),
-        "translated_text": (translated_text or "").strip(),
+        "decision": normalized_decision,
+        "translated_text": "" if normalized_decision == KEEP_ORIGIN_LABEL else (translated_text or "").strip(),
     }
 
 
@@ -91,7 +93,9 @@ def _looks_like_english_prose(text: str) -> bool:
     cleaned = _strip_placeholders(text).strip()
     if not cleaned:
         return False
-    if "@" in cleaned or "http://" in cleaned or "https://" in cleaned:
+    if "@" in cleaned or "http://" in cleaned or "https://" in cleaned or looks_like_url_fragment(cleaned):
+        return False
+    if _looks_like_reference_entry(cleaned):
         return False
     words = EN_WORD_RE.findall(cleaned)
     if len(words) < 8:
@@ -137,6 +141,8 @@ def _should_force_translate_body_text(item: dict) -> bool:
         return False
     if should_skip_metadata_fragment(item):
         return False
+    if _looks_like_reference_entry(source_text):
+        return False
     if _looks_like_garbled_fragment(source_text):
         return False
     if _looks_like_short_fragment(source_text):
@@ -163,6 +169,27 @@ def _should_reject_keep_origin(item: dict, decision: str) -> bool:
     return _should_force_translate_body_text(item)
 
 
+def _canonicalize_batch_result(batch: list[dict], result: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
+    batch_items = {str(item.get("item_id", "") or ""): item for item in batch}
+    canonical: dict[str, dict[str, str]] = {}
+    for item_id, payload in result.items():
+        item = batch_items.get(item_id)
+        decision = _normalize_decision(str(payload.get("decision", "translate") or "translate"))
+        translated_text = str(payload.get("translated_text", "") or "").strip()
+        if item is not None:
+            source_text = _unit_source_text(item).strip()
+            if (
+                decision != KEEP_ORIGIN_LABEL
+                and translated_text
+                and translated_text == source_text
+                and not _should_force_translate_body_text(item)
+            ):
+                decision = KEEP_ORIGIN_LABEL
+                translated_text = ""
+        canonical[item_id] = _result_entry(decision, translated_text)
+    return canonical
+
+
 def _validate_batch_result(batch: list[dict], result: dict[str, dict[str, str]]) -> None:
     expected_ids = {item["item_id"] for item in batch}
     actual_ids = set(result)
@@ -186,8 +213,13 @@ def _validate_batch_result(batch: list[dict], result: dict[str, dict[str, str]])
         if not translated_placeholders.issubset(source_placeholders):
             unexpected = sorted(translated_placeholders - source_placeholders)
             raise ValueError(f"{item_id}: unexpected placeholders in translation: {unexpected}")
-        if translated_text.strip() == source_text.strip() and _looks_like_english_prose(source_text):
-            raise ValueError(f"{item_id}: translation unchanged from English source")
+        if translated_text.strip() == source_text.strip():
+            if looks_like_url_fragment(source_text):
+                continue
+            if _looks_like_reference_entry(source_text):
+                continue
+            if _looks_like_english_prose(source_text):
+                raise ValueError(f"{item_id}: translation unchanged from English source")
 
 
 def _translate_single_item_plain_text(
@@ -232,6 +264,7 @@ def _translate_single_item_with_decision(
         request_label=request_label,
     )
     result = _parse_translation_payload(content)
+    result = _canonicalize_batch_result([item], result)
     _validate_batch_result([item], result)
     return result
 
@@ -256,6 +289,7 @@ def _translate_batch_once(
         request_label=request_label,
     )
     result = _parse_translation_payload(content)
+    result = _canonicalize_batch_result(batch, result)
     _validate_batch_result(batch, result)
     return result
 

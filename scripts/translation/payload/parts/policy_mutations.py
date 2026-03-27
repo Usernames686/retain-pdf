@@ -10,6 +10,56 @@ from .common import RESETTABLE_LABEL_PREFIXES
 from .common import clear_translation_fields
 
 
+def _bbox_tuple(item: dict) -> tuple[float, float, float, float] | None:
+    bbox = item.get("bbox", [])
+    if len(bbox) != 4:
+        return None
+    x0, y0, x1, y1 = (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+    if x1 <= x0 or y1 <= y0:
+        return None
+    return x0, y0, x1, y1
+
+
+def _axis_overlap(a0: float, a1: float, b0: float, b1: float) -> float:
+    return max(0.0, min(a1, b1) - max(a0, b0))
+
+
+def _code_region_contains_item(code_item: dict, item: dict) -> bool:
+    code_bbox = _bbox_tuple(code_item)
+    item_bbox = _bbox_tuple(item)
+    if code_bbox is None or item_bbox is None:
+        return False
+
+    cx0, cy0, cx1, cy1 = code_bbox
+    ix0, iy0, ix1, iy1 = item_bbox
+    item_w = ix1 - ix0
+    item_h = iy1 - iy0
+    if item_w <= 0.0 or item_h <= 0.0:
+        return False
+
+    overlap_w = _axis_overlap(cx0, cx1, ix0, ix1)
+    overlap_h = _axis_overlap(cy0, cy1, iy0, iy1)
+    if overlap_w <= 0.0 or overlap_h <= 0.0:
+        return False
+
+    area_ratio = (overlap_w * overlap_h) / (item_w * item_h)
+    width_ratio = overlap_w / item_w
+    height_ratio = overlap_h / item_h
+    center_x = (ix0 + ix1) / 2.0
+    center_y = (iy0 + iy1) / 2.0
+    center_inside = cx0 <= center_x <= cx1 and cy0 <= center_y <= cy1
+    if not center_inside:
+        return False
+
+    if area_ratio >= 0.6:
+        return True
+    if width_ratio >= 0.8 and height_ratio >= 0.7:
+        return True
+    if width_ratio >= 0.7 and height_ratio >= 0.8:
+        return True
+    return False
+
+
 def reset_policy_state(payload: list[dict]) -> int:
     reset = 0
     for item in payload:
@@ -41,7 +91,10 @@ def _mark_item_skipped(item: dict, label: str) -> None:
 
 def apply_shared_literal_block_policy(payload: list[dict]) -> dict[str, int]:
     code_skipped = 0
+    code_region_skipped = 0
     translate_forced = 0
+    code_items = [item for item in payload if str(item.get("block_type", "") or "") == "code_body"]
+
     for item in payload:
         if not item.get("should_translate", True):
             continue
@@ -55,8 +108,19 @@ def apply_shared_literal_block_policy(payload: list[dict]) -> dict[str, int]:
             item["should_translate"] = True
             item["skip_reason"] = ""
             translate_forced += 1
+
+    for item in payload:
+        if not item.get("should_translate", True):
+            continue
+        if str(item.get("block_type", "") or "") == "code_body":
+            continue
+        if any(_code_region_contains_item(code_item, item) for code_item in code_items):
+            _mark_item_skipped(item, "skip_code_region")
+            code_region_skipped += 1
+
     return {
         "shared_literal_code_skipped": code_skipped,
+        "shared_literal_code_region_skipped": code_region_skipped,
         "shared_literal_translate_forced": translate_forced,
     }
 

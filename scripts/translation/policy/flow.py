@@ -84,10 +84,7 @@ def apply_translation_policies(
         if policy_config.enable_reference_zone_skip
         else 0
     )
-    shared_literal_summary = {
-        "shared_literal_code_skipped": 0,
-        "shared_literal_translate_forced": 0,
-    }
+    shared_literal_summary = payload_ops.apply_shared_literal_block_policy(payload)
     mixed_literal_summary = {
         "mixed_keep_all": 0,
         "mixed_translate_all": 0,
@@ -111,6 +108,7 @@ def apply_translation_policies(
         "narrow_body_skipped": narrow_body_skipped,
         "metadata_fragment_skipped": metadata_fragment_skipped,
         "shared_literal_code_skipped": shared_literal_summary["shared_literal_code_skipped"],
+        "shared_literal_code_region_skipped": shared_literal_summary["shared_literal_code_region_skipped"],
         "shared_literal_translate_forced": shared_literal_summary["shared_literal_translate_forced"],
         "mixed_keep_all": mixed_literal_summary["mixed_keep_all"],
         "mixed_translate_all": mixed_literal_summary["mixed_translate_all"],
@@ -145,6 +143,7 @@ def apply_translation_policies(
             "narrow_body_skipped": narrow_body_skipped,
             "metadata_fragment_skipped": metadata_fragment_skipped,
             "shared_literal_code_skipped": shared_literal_summary["shared_literal_code_skipped"],
+            "shared_literal_code_region_skipped": shared_literal_summary["shared_literal_code_region_skipped"],
             "shared_literal_translate_forced": shared_literal_summary["shared_literal_translate_forced"],
             "mixed_keep_all": mixed_literal_summary["mixed_keep_all"],
             "mixed_translate_all": mixed_literal_summary["mixed_translate_all"],
@@ -159,6 +158,7 @@ def apply_translation_policies(
             "narrow_body_skipped": skip_summary["narrow_body_skipped"],
             "metadata_fragment_skipped": metadata_fragment_skipped,
             "shared_literal_code_skipped": shared_literal_summary["shared_literal_code_skipped"],
+            "shared_literal_code_region_skipped": shared_literal_summary["shared_literal_code_region_skipped"],
             "shared_literal_translate_forced": shared_literal_summary["shared_literal_translate_forced"],
             "mixed_keep_all": mixed_literal_summary["mixed_keep_all"],
             "mixed_translate_all": mixed_literal_summary["mixed_translate_all"],

@@ -30,6 +30,15 @@ EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
 LETTER_RE = re.compile(r"[A-Za-z]")
 SHORT_ALPHA_FRAGMENT_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._/-]{0,7}$")
 SECTION_MARKER_START_RE = re.compile(r"^(?:\(|\[)?(?:\d+(?:\.\d+)*|[A-Za-z])(?:\)|\]|\.)\s+|^[•\-*]\s+")
+NAME_LIKE_TOKEN_RE = re.compile(r"\b[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'`´.-]{1,}\b")
+ADDRESS_WORD_RE = re.compile(
+    r"\b(platz|street|st\.|road|rd\.|avenue|ave\.|campus|building|room|suite|postal|postfach|germany|france|spain|italy|uk|u\.k\.|usa|u\.s\.a\.|denmark|sweden|norway|finland|japan|korea)\b",
+    re.I,
+)
+URL_LIKE_RE = re.compile(
+    r"^(?:(?:https?://|ftp://|www\.)\S+|(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?:/[A-Za-z0-9._~:/?#\[\]@!$&()*+,;=%-]*)?)$",
+    re.I,
+)
 
 
 def _normalized_text(item: dict) -> str:
@@ -56,6 +65,8 @@ def _looks_like_editorial_metadata(text: str) -> bool:
 def _looks_like_author_or_affiliation(text: str) -> bool:
     upper_name_tokens = len(ALL_CAPS_TOKEN_RE.findall(text))
     initial_names = len(INITIAL_NAME_RE.findall(text))
+    name_like_tokens = len(NAME_LIKE_TOKEN_RE.findall(text))
+    comma_count = _comma_count(text)
     if AUTHOR_MARKER_RE.search(text) and (_comma_count(text) >= 1 or initial_names >= 1 or upper_name_tokens >= 2):
         return True
     if PERSON_NAME_RE.fullmatch(text.strip()) and len(text) <= 80:
@@ -64,9 +75,15 @@ def _looks_like_author_or_affiliation(text: str) -> bool:
         return True
     if upper_name_tokens >= 4 and _comma_count(text) >= 1 and len(text) <= 360:
         return True
+    if name_like_tokens >= 4 and comma_count >= 2 and len(text) <= 420:
+        return True
+    if name_like_tokens >= 8 and comma_count >= 4 and len(text) <= 520:
+        return True
     if AFFILIATION_RE.search(text) and len(text) <= 160 and _comma_count(text) == 0:
         return True
     if AFFILIATION_RE.search(text) and (_comma_count(text) >= 2 or POSTAL_RE.search(text)) and len(text) <= 360:
+        return True
+    if POSTAL_RE.search(text) and (ADDRESS_WORD_RE.search(text) or comma_count >= 2) and len(text) <= 240:
         return True
     if EMAIL_RE.search(text):
         return True
@@ -100,6 +117,13 @@ def _looks_like_short_alpha_fragment(text: str) -> bool:
     return _letter_count(stripped) < 4
 
 
+def looks_like_url_fragment(text: str) -> bool:
+    stripped = text.strip().strip("()[]<>\"'“”‘’,;")
+    if not stripped or any(ch.isspace() for ch in stripped):
+        return False
+    return bool(URL_LIKE_RE.fullmatch(stripped))
+
+
 def should_skip_metadata_fragment(item: dict) -> bool:
     if item.get("block_type") not in {"text", "title", "list"}:
         return False
@@ -118,6 +142,8 @@ def should_skip_metadata_fragment(item: dict) -> bool:
         return True
     if _looks_like_copyright_or_journal_line(text):
         return True
+    if looks_like_url_fragment(text):
+        return True
     if _looks_like_short_alpha_fragment(text):
         return True
 
@@ -134,4 +160,8 @@ def find_metadata_fragment_item_ids(payload: list[dict]) -> set[str]:
     return skipped
 
 
-__all__ = ["find_metadata_fragment_item_ids", "should_skip_metadata_fragment"]
+__all__ = [
+    "find_metadata_fragment_item_ids",
+    "looks_like_url_fragment",
+    "should_skip_metadata_fragment",
+]

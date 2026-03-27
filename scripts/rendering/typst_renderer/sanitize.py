@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 from config import fonts
+from rendering.render_payload_parts.shared import get_render_protected_text
 from rendering.typst_renderer.compiler import compile_typst_overlay_pdf
 from rendering.typst_renderer.shared import TYPST_OVERLAY_DIR
 from rendering.typst_renderer.shared import force_plain_text_item_at_index
@@ -37,12 +38,7 @@ def _item_formula_map(item: dict) -> list[dict]:
 
 
 def _item_render_text(item: dict) -> str:
-    return str(
-        item.get("render_protected_text")
-        or item.get("translation_unit_protected_translated_text")
-        or item.get("protected_translated_text")
-        or ""
-    ).strip()
+    return get_render_protected_text(item)
 
 
 def _apply_formula_map(item: dict, formula_map: list[dict]) -> dict:

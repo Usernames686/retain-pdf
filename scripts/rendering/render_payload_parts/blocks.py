@@ -30,6 +30,7 @@ from rendering.render_payload_parts.metrics import VERTICAL_COLLISION_GAP_PT
 from rendering.render_payload_parts.metrics import text_demand_units
 from rendering.render_payload_parts.shared import COMPACT_SCALE
 from rendering.render_payload_parts.shared import COMPACT_TRIGGER_RATIO
+from rendering.render_payload_parts.shared import get_render_protected_text
 from rendering.render_payload_parts.shared import HEAVY_COMPACT_RATIO
 from rendering.render_payload_parts.shared import is_flag_like_plain_text_block
 from rendering.render_payload_parts.shared import translation_density_ratio
@@ -99,12 +100,7 @@ def build_render_blocks(
     block_payloads: list[dict] = []
 
     for index, item in enumerate(translated_items):
-        translated_text = (
-            item.get("render_protected_text")
-            or item.get("translation_unit_protected_translated_text")
-            or item.get("protected_translated_text")
-            or ""
-        ).strip()
+        translated_text = get_render_protected_text(item)
         bbox = item.get("bbox", [])
         if len(bbox) != 4 or not translated_text:
             continue

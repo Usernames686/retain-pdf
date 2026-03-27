@@ -129,7 +129,10 @@ def build_translation_policy_config(
         enable_metadata_fragment_skip=should_apply_metadata_fragment_skip(mode)
         if enable_metadata_fragment_skip is None
         else enable_metadata_fragment_skip,
-        metadata_fragment_max_page_idx=1 if metadata_fragment_max_page_idx is None else metadata_fragment_max_page_idx,
+        metadata_fragment_max_page_idx=(
+            8 if (metadata_fragment_max_page_idx is None and mode == "sci") else
+            (1 if metadata_fragment_max_page_idx is None else metadata_fragment_max_page_idx)
+        ),
         enable_candidate_continuation_review=should_apply_candidate_continuation_review()
         if enable_candidate_continuation_review is None
         else enable_candidate_continuation_review,

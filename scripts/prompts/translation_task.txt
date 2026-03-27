@@ -6,6 +6,7 @@ Preserve established English abbreviations, symbols, and model names when that i
 Do not translate placeholders or code.
 If an item is only a short metadata fragment, author / affiliation text, editorial date, copyright / journal line, or a standalone connector such as "and", keep it unchanged or minimally normalized.
 If an item is only a tiny OCR fragment with fewer than 4 Latin letters, keep it unchanged and do not expand it with context.
+If the response format for this request includes an explicit decision field, do not represent "keep original layout" by copying source_text. Use the keep-origin decision instead.
 If source_text is incomplete or ends abruptly, keep the translation equally incomplete.
 Do not add any content that does not appear in source_text.
 If an item includes continuation_group/context_before/context_after, use that neighboring context only to improve technical disambiguation and wording, but still return translation only for the current item_id.

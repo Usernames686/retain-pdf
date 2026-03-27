@@ -47,6 +47,16 @@ def same_meaningful_render_text(source_text: str, translated_text: str) -> bool:
     return normalize_render_text(source_text) == normalize_render_text(translated_text)
 
 
+def get_render_protected_text(item: dict) -> str:
+    if "render_protected_text" in item:
+        return str(item.get("render_protected_text", "") or "").strip()
+    return str(
+        item.get("translation_unit_protected_translated_text")
+        or item.get("protected_translated_text")
+        or ""
+    ).strip()
+
+
 def source_word_count(item: dict) -> int:
     source_text = item.get("protected_source_text") or item.get("source_text") or ""
     plain = strip_formula_placeholders(source_text)
