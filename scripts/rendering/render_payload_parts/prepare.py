@@ -45,6 +45,7 @@ def prepare_render_payloads_by_page(translated_pages: dict[int, list[dict]]) -> 
                 or ""
             ).strip()
             item["render_protected_text"] = "" if same_meaningful_render_text(source_text, render_text) else render_text
+            item["render_source_text"] = source_text
             item["render_formula_map"] = item.get("translation_unit_formula_map") or item.get("formula_map", [])
             flat_items.append(item)
 
@@ -96,10 +97,21 @@ def prepare_render_payloads_by_page(translated_pages: dict[int, list[dict]]) -> 
                 )
             )
 
-        split_weights = source_weights if any(weight > 0 for weight in source_weights) else capacities
-        chunks = split_protected_text_for_boxes(protected_unit_text, unit_formula_map, split_weights)
-        for item, chunk in zip(items, chunks):
+        chunks = split_protected_text_for_boxes(
+            protected_unit_text,
+            unit_formula_map,
+            capacities,
+            preferred_weights=source_weights if any(weight > 0 for weight in source_weights) else None,
+        )
+        source_chunks = split_protected_text_for_boxes(
+            protected_unit_source_text,
+            unit_formula_map,
+            capacities,
+            preferred_weights=source_weights if any(weight > 0 for weight in source_weights) else None,
+        )
+        for item, chunk, source_chunk in zip(items, chunks, source_chunks):
             item["render_protected_text"] = chunk
+            item["render_source_text"] = source_chunk
             item["render_formula_map"] = unit_formula_map
 
     suspicious_total = 0

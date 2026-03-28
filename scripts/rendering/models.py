@@ -11,3 +11,6 @@ class RenderBlock:
     render_kind: str
     font_size_pt: float
     leading_em: float
+    fit_to_box: bool = False
+    fit_min_font_size_pt: float = 0.0
+    fit_min_leading_em: float = 0.0

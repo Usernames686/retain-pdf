@@ -43,6 +43,8 @@ const PROVIDER_PRESETS = {
   },
 };
 
+const DEFAULT_FILE_LABEL = "点击选择文件或拖到这里";
+
 function apiBase() {
   return $("api-base").value.trim().replace(/\/$/, "");
 }
@@ -515,14 +517,29 @@ function resetUploadProgress() {
   $("upload-progress-text").textContent = "0%";
 }
 
+function clearFileInputValue() {
+  const input = $("file");
+  if (input) {
+    input.value = "";
+  }
+}
+
 function resetUploadedFile() {
   state.uploadId = "";
   state.uploadedFileName = "";
   state.uploadedPageCount = 0;
   state.uploadedBytes = 0;
+  $("file").value = "";
   $("submit-btn").disabled = true;
   $("upload-status").textContent = "未上传文件";
+  $("file-label").textContent = DEFAULT_FILE_LABEL;
   $("file-label").title = "";
+}
+
+function prepareFilePicker() {
+  // Safari / iPadOS may not fire change when the same file is chosen again
+  // unless the native file input value is cleared before opening the picker.
+  clearFileInputValue();
 }
 
 function updateDeveloperVisibility() {
@@ -795,9 +812,9 @@ async function handleProtectedArtifactClick(event) {
 
 async function handleFileSelected() {
   const file = $("file").files[0];
-  $("file-label").textContent = file ? file.name : "点击选择文件或拖到这里";
   resetUploadedFile();
   resetUploadProgress();
+  $("file-label").textContent = file ? file.name : DEFAULT_FILE_LABEL;
   $("file-label").title = file ? file.name : "";
   if (!file) {
     return;
@@ -818,8 +835,10 @@ async function handleFileSelected() {
     state.uploadedBytes = Number(payload.bytes || file.size || 0);
     $("submit-btn").disabled = !state.uploadId;
     $("upload-status").textContent = `上传完成: ${state.uploadedFileName} | ${state.uploadedPageCount} 页 | ${(state.uploadedBytes / 1024 / 1024).toFixed(2)} MB`;
+    clearFileInputValue();
   } catch (err) {
     resetUploadedFile();
+    clearFileInputValue();
     $("error-box").textContent = err.message;
     $("upload-status").textContent = "上传失败";
   }
@@ -944,6 +963,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if (!$("base_url").value.trim()) {
     $("base_url").value = defaultModelBaseUrl();
   }
+  $("file").addEventListener("click", prepareFilePicker);
   $("file").addEventListener("change", handleFileSelected);
   $("developer-btn").addEventListener("click", openDeveloperAccess);
   $("developer-auth-submit-btn").addEventListener("click", submitDeveloperPassword);

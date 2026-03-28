@@ -114,6 +114,10 @@ def translate_items_to_path(
         finalize_payload_orchestration_metadata(payload)
         save_translations(translation_path, payload)
         print(f"{label}: skipped {skip_summary['reference_zone_skipped']} reference-zone items")
+    if skip_summary.get("shared_literal_image_region_skipped"):
+        finalize_payload_orchestration_metadata(payload)
+        save_translations(translation_path, payload)
+        print(f"{label}: skipped {skip_summary['shared_literal_image_region_skipped']} image-region items")
     if any(skip_summary.get(key) for key in ("mixed_keep_all", "mixed_translate_all", "mixed_translate_tail")):
         finalize_payload_orchestration_metadata(payload)
         save_translations(translation_path, payload)

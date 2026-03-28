@@ -269,8 +269,18 @@ def is_body_text_candidate(item: dict, page_text_width_med: float) -> bool:
         return False
     text_len = len(re.sub(r"\s+", "", item.get("source_text", "")))
     width = bbox_width(item)
+    structure_role = str((item.get("metadata", {}) or {}).get("structure_role", "") or "")
     if page_text_width_med > 0 and width < page_text_width_med * 0.75:
-        return False
+        # Multi-column body text can be much narrower than the page-wide median.
+        # If OCR already marks it as body and it has enough real text / lines,
+        # keep it in the body bucket so page-level normalization does not shrink
+        # it into caption-like sizing.
+        if not (
+            structure_role == "body"
+            and text_len >= 36
+            and visual_line_count(item) >= 2
+        ):
+            return False
     return text_len >= 40
 
 

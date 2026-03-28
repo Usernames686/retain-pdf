@@ -10,6 +10,12 @@ from .common import RESETTABLE_LABEL_PREFIXES
 from .common import clear_translation_fields
 
 
+_FOUNDATIONAL_SKIP_BY_BLOCK_TYPE = {
+    "image_body": ("skip_image_body", "skip_image_body"),
+    "code_body": ("code", "code"),
+}
+
+
 def _bbox_tuple(item: dict) -> tuple[float, float, float, float] | None:
     bbox = item.get("bbox", [])
     if len(bbox) != 4:
@@ -24,13 +30,13 @@ def _axis_overlap(a0: float, a1: float, b0: float, b1: float) -> float:
     return max(0.0, min(a1, b1) - max(a0, b0))
 
 
-def _code_region_contains_item(code_item: dict, item: dict) -> bool:
-    code_bbox = _bbox_tuple(code_item)
+def _region_contains_item(region_item: dict, item: dict) -> bool:
+    region_bbox = _bbox_tuple(region_item)
     item_bbox = _bbox_tuple(item)
-    if code_bbox is None or item_bbox is None:
+    if region_bbox is None or item_bbox is None:
         return False
 
-    cx0, cy0, cx1, cy1 = code_bbox
+    cx0, cy0, cx1, cy1 = region_bbox
     ix0, iy0, ix1, iy1 = item_bbox
     item_w = ix1 - ix0
     item_h = iy1 - iy0
@@ -60,6 +66,11 @@ def _code_region_contains_item(code_item: dict, item: dict) -> bool:
     return False
 
 
+def _foundational_skip_defaults(item: dict) -> tuple[str, str] | None:
+    block_type = str(item.get("block_type", "") or "")
+    return _FOUNDATIONAL_SKIP_BY_BLOCK_TYPE.get(block_type)
+
+
 def reset_policy_state(payload: list[dict]) -> int:
     reset = 0
     for item in payload:
@@ -70,6 +81,14 @@ def reset_policy_state(payload: list[dict]) -> int:
                 item["translation_unit_protected_source_text"] = original_protected_source
         item["mixed_literal_action"] = ""
         item["mixed_literal_prefix"] = ""
+        foundational_skip = _foundational_skip_defaults(item)
+        if foundational_skip is not None:
+            label, skip_reason = foundational_skip
+            item["classification_label"] = label
+            item["should_translate"] = False
+            item["skip_reason"] = skip_reason
+            clear_translation_fields(item)
+            continue
         label = str(item.get("classification_label", "") or "")
         if not label:
             continue
@@ -92,8 +111,10 @@ def _mark_item_skipped(item: dict, label: str) -> None:
 def apply_shared_literal_block_policy(payload: list[dict]) -> dict[str, int]:
     code_skipped = 0
     code_region_skipped = 0
+    image_region_skipped = 0
     translate_forced = 0
     code_items = [item for item in payload if str(item.get("block_type", "") or "") == "code_body"]
+    image_items = [item for item in payload if str(item.get("block_type", "") or "") == "image_body"]
 
     for item in payload:
         if not item.get("should_translate", True):
@@ -112,15 +133,21 @@ def apply_shared_literal_block_policy(payload: list[dict]) -> dict[str, int]:
     for item in payload:
         if not item.get("should_translate", True):
             continue
-        if str(item.get("block_type", "") or "") == "code_body":
+        block_type = str(item.get("block_type", "") or "")
+        if block_type in {"code_body", "image_body"}:
             continue
-        if any(_code_region_contains_item(code_item, item) for code_item in code_items):
+        if any(_region_contains_item(code_item, item) for code_item in code_items):
             _mark_item_skipped(item, "skip_code_region")
             code_region_skipped += 1
+            continue
+        if any(_region_contains_item(image_item, item) for image_item in image_items):
+            _mark_item_skipped(item, "skip_image_region")
+            image_region_skipped += 1
 
     return {
         "shared_literal_code_skipped": code_skipped,
         "shared_literal_code_region_skipped": code_region_skipped,
+        "shared_literal_image_region_skipped": image_region_skipped,
         "shared_literal_translate_forced": translate_forced,
     }
 

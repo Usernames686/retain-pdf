@@ -22,10 +22,10 @@ from rendering.math_utils import build_markdown_from_parts
 from rendering.math_utils import build_plain_text_from_text
 from rendering.models import RenderBlock
 from rendering.render_payload_parts.metrics import estimated_render_height_pt
-from rendering.render_payload_parts.metrics import fit_block_to_vertical_limit
 from rendering.render_payload_parts.metrics import fit_translated_block_metrics
 from rendering.render_payload_parts.metrics import LAYOUT_DENSITY_SAFE_MAX
 from rendering.render_payload_parts.metrics import LAYOUT_DENSITY_SAFE_MIN
+from rendering.render_payload_parts.metrics import resolve_typst_binary_fit
 from rendering.render_payload_parts.metrics import VERTICAL_COLLISION_GAP_PT
 from rendering.render_payload_parts.metrics import text_demand_units
 from rendering.render_payload_parts.shared import COMPACT_SCALE
@@ -33,15 +33,17 @@ from rendering.render_payload_parts.shared import COMPACT_TRIGGER_RATIO
 from rendering.render_payload_parts.shared import get_render_protected_text
 from rendering.render_payload_parts.shared import HEAVY_COMPACT_RATIO
 from rendering.render_payload_parts.shared import is_flag_like_plain_text_block
+from rendering.render_payload_parts.shared import source_word_count
 from rendering.render_payload_parts.shared import translation_density_ratio
+from rendering.render_payload_parts.shared import translated_zh_char_count
 
 BODY_DENSITY_TARGET_MIN = 0.82
 BODY_DENSITY_TARGET_MAX = 0.92
-BODY_PRESSURE_TIGHTEN_TRIGGER = 1.24
-BODY_PRESSURE_TIGHTEN_TRIGGER_HIGH = 1.16
-BODY_FINAL_FORCE_FIT_DENSITY = 1.05
-BODY_FINAL_FORCE_FIT_NON_HEAVY_EXTRA_MARGIN = 0.04
-BODY_FINAL_VERTICAL_TARGET_RATIO = 0.9
+BODY_PRESSURE_TIGHTEN_TRIGGER = 1.38
+BODY_PRESSURE_TIGHTEN_TRIGGER_HIGH = 1.30
+BODY_FINAL_FORCE_FIT_DENSITY = 1.12
+BODY_FINAL_FORCE_FIT_NON_HEAVY_EXTRA_MARGIN = 0.08
+BODY_FINAL_VERTICAL_TARGET_RATIO = 0.96
 SMALL_PAGE_BOX_RATIO = 0.06
 ULTRA_SMALL_PAGE_BOX_RATIO = 0.04
 SMALL_BOX_GROW_DENSITY_TRIGGER = 0.88
@@ -50,9 +52,24 @@ SMALL_BOX_GROW_STEP = 0.22
 SMALL_BOX_GROW_ELIGIBLE_MAX_DENSITY = 1.02
 SMALL_BOX_GROW_MAX_DENSITY = 1.03
 VERTICAL_COLLISION_MIN_WIDTH_OVERLAP_RATIO = 0.6
-VERTICAL_COLLISION_SOURCE_GAP_TRIGGER_PT = 5.0
-VERTICAL_COLLISION_DENSITY_TRIGGER = 0.99
-VERTICAL_COLLISION_OVERFLOW_TRIGGER = 1.12
+VERTICAL_COLLISION_SOURCE_GAP_TRIGGER_PT = 3.0
+VERTICAL_COLLISION_TRIGGER_RATIO = 0.98
+ADJACENT_BODY_SMOOTH_MAX_GAP_PT = 42.0
+ADJACENT_BODY_SMOOTH_MIN_WIDTH_RATIO = 0.72
+ADJACENT_BODY_SMOOTH_MIN_WIDTH_OVERLAP_RATIO = 0.64
+ADJACENT_BODY_SMOOTH_MAX_LEFT_DELTA_PT = 18.0
+ADJACENT_BODY_SMOOTH_MAX_CENTER_DELTA_PT = 22.0
+ADJACENT_BODY_SMOOTH_MIN_BOX_HEIGHT_PT = 36.0
+ADJACENT_BODY_SMOOTH_MIN_WIDTH_PT = 64.0
+ADJACENT_BODY_SMOOTH_MIN_PAGE_WIDTH_RATIO = 0.38
+ADJACENT_BODY_SMOOTH_MIN_SOURCE_WORDS = 10
+ADJACENT_BODY_SMOOTH_MIN_TRANSLATED_ZH_CHARS = 18
+ADJACENT_BODY_SMOOTH_MAX_FONT_DELTA_PT = 0.24
+ADJACENT_BODY_SMOOTH_RELAXED_FONT_DELTA_PT = 0.34
+ADJACENT_BODY_SMOOTH_MAX_LEADING_DELTA_EM = 0.06
+ADJACENT_BODY_SMOOTH_RELAXED_LEADING_DELTA_EM = 0.09
+ADJACENT_BODY_SMOOTH_GROW_DENSITY_MAX = 0.95
+ADJACENT_BODY_SMOOTH_RELAXED_GROW_DENSITY_MAX = 0.99
 
 
 def _page_box_area_ratio(bbox: list[float], page_width: float | None, page_height: float | None) -> float:
@@ -63,6 +80,220 @@ def _page_box_area_ratio(bbox: list[float], page_width: float | None, page_heigh
     if width <= 0 or height <= 0:
         return 0.0
     return (width * height) / (page_width * page_height)
+
+
+def _payload_inner_width(payload: dict) -> float:
+    return max(8.0, payload["inner_bbox"][2] - payload["inner_bbox"][0])
+
+
+def _payload_inner_height(payload: dict) -> float:
+    return max(8.0, payload["inner_bbox"][3] - payload["inner_bbox"][1])
+
+
+def _payload_inner_top(payload: dict) -> float:
+    return payload["inner_bbox"][1]
+
+
+def _payload_inner_bottom(payload: dict) -> float:
+    return payload["inner_bbox"][3]
+
+
+def _payload_center_x(payload: dict) -> float:
+    return (payload["inner_bbox"][0] + payload["inner_bbox"][2]) / 2.0
+
+
+def _payload_estimated_density(
+    payload: dict,
+    *,
+    font_size_pt: float | None = None,
+    leading_em: float | None = None,
+) -> float:
+    inner_height = _payload_inner_height(payload)
+    estimated_height = estimated_render_height_pt(
+        payload["inner_bbox"],
+        payload["translated_text"],
+        payload["formula_map"],
+        font_size_pt if font_size_pt is not None else payload["font_size_pt"],
+        leading_em if leading_em is not None else payload["leading_em"],
+    )
+    return estimated_height / inner_height
+
+
+def _payload_has_enough_text_for_smoothing(payload: dict) -> bool:
+    item = payload["item"]
+    source_words = source_word_count(item)
+    translated_zh_chars = translated_zh_char_count(payload["translated_text"])
+    return source_words >= ADJACENT_BODY_SMOOTH_MIN_SOURCE_WORDS or translated_zh_chars >= ADJACENT_BODY_SMOOTH_MIN_TRANSLATED_ZH_CHARS
+
+
+def _is_adjacent_body_smoothing_candidate(payload: dict, *, page_text_width_med: float) -> bool:
+    if not payload["is_body"] or payload["render_kind"] != "markdown":
+        return False
+    if payload["heavy_dense_small_box"]:
+        return False
+    if _payload_inner_height(payload) < ADJACENT_BODY_SMOOTH_MIN_BOX_HEIGHT_PT:
+        return False
+    width = _payload_inner_width(payload)
+    min_width = ADJACENT_BODY_SMOOTH_MIN_WIDTH_PT
+    if page_text_width_med > 0:
+        min_width = max(min_width, page_text_width_med * ADJACENT_BODY_SMOOTH_MIN_PAGE_WIDTH_RATIO)
+    if width < min_width:
+        return False
+    if not _payload_has_enough_text_for_smoothing(payload):
+        return False
+    return True
+
+
+def _is_same_column_adjacent_body_pair(current: dict, nxt: dict, *, page_text_width_med: float) -> bool:
+    if not _is_adjacent_body_smoothing_candidate(current, page_text_width_med=page_text_width_med):
+        return False
+    if not _is_adjacent_body_smoothing_candidate(nxt, page_text_width_med=page_text_width_med):
+        return False
+    if _payload_inner_top(nxt) < _payload_inner_top(current):
+        return False
+
+    current_width = _payload_inner_width(current)
+    next_width = _payload_inner_width(nxt)
+    width_ratio = min(current_width, next_width) / max(current_width, next_width)
+    if width_ratio < ADJACENT_BODY_SMOOTH_MIN_WIDTH_RATIO:
+        return False
+
+    overlap_width = max(0.0, min(current["inner_bbox"][2], nxt["inner_bbox"][2]) - max(current["inner_bbox"][0], nxt["inner_bbox"][0]))
+    if overlap_width / min(current_width, next_width) < ADJACENT_BODY_SMOOTH_MIN_WIDTH_OVERLAP_RATIO:
+        return False
+
+    gap = _payload_inner_top(nxt) - _payload_inner_bottom(current)
+    max_gap = max(ADJACENT_BODY_SMOOTH_MAX_GAP_PT, min(_payload_inner_height(current), _payload_inner_height(nxt)) * 0.45)
+    if gap < -4.0 or gap > max_gap:
+        return False
+
+    left_delta = abs(current["inner_bbox"][0] - nxt["inner_bbox"][0])
+    center_delta = abs(_payload_center_x(current) - _payload_center_x(nxt))
+    left_limit = max(ADJACENT_BODY_SMOOTH_MAX_LEFT_DELTA_PT, max(current_width, next_width) * 0.06)
+    center_limit = max(ADJACENT_BODY_SMOOTH_MAX_CENTER_DELTA_PT, max(current_width, next_width) * 0.08)
+    if left_delta > left_limit and center_delta > center_limit:
+        return False
+    return True
+
+
+def _cap_font_growth_by_density(payload: dict, target_font_size_pt: float, *, density_limit: float) -> float:
+    current_font_size = payload["font_size_pt"]
+    if target_font_size_pt <= current_font_size:
+        return round(target_font_size_pt, 2)
+
+    low = current_font_size
+    high = target_font_size_pt
+    best = current_font_size
+    for _ in range(8):
+        mid = (low + high) / 2.0
+        if _payload_estimated_density(payload, font_size_pt=mid) <= density_limit:
+            best = mid
+            low = mid
+        else:
+            high = mid
+    return round(best, 2)
+
+
+def _cap_leading_growth_by_density(payload: dict, target_leading_em: float, *, density_limit: float) -> float:
+    current_leading = payload["leading_em"]
+    if target_leading_em <= current_leading:
+        return round(target_leading_em, 2)
+
+    low = current_leading
+    high = target_leading_em
+    best = current_leading
+    for _ in range(8):
+        mid = (low + high) / 2.0
+        if _payload_estimated_density(payload, leading_em=mid) <= density_limit:
+            best = mid
+            low = mid
+        else:
+            high = mid
+    return round(best, 2)
+
+
+def _normalize_body_payload_leading(payload: dict) -> None:
+    reference_font_size_pt = payload.get("page_body_font_size_pt") or payload["font_size_pt"]
+    payload["leading_em"] = normalize_leading_em_for_font_size(
+        payload["font_size_pt"],
+        payload["leading_em"],
+        reference_font_size_pt=reference_font_size_pt,
+        min_leading_em=BODY_LEADING_MIN,
+        max_leading_em=BODY_LEADING_MAX,
+        strength=BODY_LEADING_SIZE_ADJUST,
+        floor_min_leading_em=BODY_LEADING_FLOOR_MIN,
+    )
+
+
+def _smooth_adjacent_body_pair(current: dict, nxt: dict) -> None:
+    current_density = _payload_estimated_density(current)
+    next_density = _payload_estimated_density(nxt)
+    relaxed = (
+        max(current_density, next_density) > 0.92
+        or current["dense_small_box"]
+        or nxt["dense_small_box"]
+        or current["prefer_typst_fit"]
+        or nxt["prefer_typst_fit"]
+    )
+    max_font_delta = ADJACENT_BODY_SMOOTH_RELAXED_FONT_DELTA_PT if relaxed else ADJACENT_BODY_SMOOTH_MAX_FONT_DELTA_PT
+    max_leading_delta = ADJACENT_BODY_SMOOTH_RELAXED_LEADING_DELTA_EM if relaxed else ADJACENT_BODY_SMOOTH_MAX_LEADING_DELTA_EM
+    density_limit = ADJACENT_BODY_SMOOTH_RELAXED_GROW_DENSITY_MAX if relaxed else ADJACENT_BODY_SMOOTH_GROW_DENSITY_MAX
+
+    if current["font_size_pt"] <= nxt["font_size_pt"]:
+        smaller_font_payload = current
+        larger_font_payload = nxt
+    else:
+        smaller_font_payload = nxt
+        larger_font_payload = current
+
+    font_delta = larger_font_payload["font_size_pt"] - smaller_font_payload["font_size_pt"]
+    if font_delta > max_font_delta:
+        excess = font_delta - max_font_delta
+        grow_allowed = (
+            not smaller_font_payload["prefer_typst_fit"]
+            and not smaller_font_payload["heavy_dense_small_box"]
+            and _payload_estimated_density(smaller_font_payload) <= density_limit
+        )
+        grown = 0.0
+        if grow_allowed:
+            desired_font_size = smaller_font_payload["font_size_pt"] + excess * 0.6
+            bounded_font_size = _cap_font_growth_by_density(
+                smaller_font_payload,
+                desired_font_size,
+                density_limit=density_limit,
+            )
+            grown = max(0.0, bounded_font_size - smaller_font_payload["font_size_pt"])
+            smaller_font_payload["font_size_pt"] = bounded_font_size
+        larger_font_payload["font_size_pt"] = round(max(6.4, larger_font_payload["font_size_pt"] - max(0.0, excess - grown)), 2)
+
+    if current["leading_em"] <= nxt["leading_em"]:
+        smaller_leading_payload = current
+        larger_leading_payload = nxt
+    else:
+        smaller_leading_payload = nxt
+        larger_leading_payload = current
+
+    leading_delta = larger_leading_payload["leading_em"] - smaller_leading_payload["leading_em"]
+    if leading_delta > max_leading_delta:
+        excess = leading_delta - max_leading_delta
+        grow_allowed = (
+            not smaller_leading_payload["prefer_typst_fit"]
+            and _payload_estimated_density(smaller_leading_payload) <= max(BODY_DENSITY_TARGET_MAX, density_limit - 0.02)
+        )
+        grown = 0.0
+        if grow_allowed:
+            desired_leading = smaller_leading_payload["leading_em"] + excess * 0.35
+            bounded_leading = _cap_leading_growth_by_density(
+                smaller_leading_payload,
+                desired_leading,
+                density_limit=max(BODY_DENSITY_TARGET_MAX, density_limit - 0.02),
+            )
+            grown = max(0.0, bounded_leading - smaller_leading_payload["leading_em"])
+            smaller_leading_payload["leading_em"] = bounded_leading
+        larger_leading_payload["leading_em"] = round(max(0.18, larger_leading_payload["leading_em"] - max(0.0, excess - grown)), 2)
+
+    _normalize_body_payload_leading(current)
+    _normalize_body_payload_leading(nxt)
 
 
 def build_render_blocks(
@@ -113,7 +344,7 @@ def build_render_blocks(
         dense_small_box = density_ratio >= 0.9 and 0 < page_box_area_ratio <= SMALL_PAGE_BOX_RATIO
         heavy_dense_small_box = density_ratio >= 1.0 and 0 < page_box_area_ratio <= ULTRA_SMALL_PAGE_BOX_RATIO
         if body_flags.get(index) and page_body_font_size_pt is not None:
-            down_band = 0.5 if heavy_dense_small_box else (0.28 if dense_small_box else 0.1)
+            down_band = 0.34 if heavy_dense_small_box else (0.2 if dense_small_box else 0.06)
             up_band = 0.18 if dense_small_box else 0.24
             font_size_pt = round(min(max(font_size_pt, page_body_font_size_pt - down_band), page_body_font_size_pt + up_band), 2)
         if dense_small_box and not body_flags.get(index):
@@ -169,6 +400,9 @@ def build_render_blocks(
                 "page_box_area_ratio": page_box_area_ratio,
                 "dense_small_box": dense_small_box,
                 "heavy_dense_small_box": heavy_dense_small_box,
+                "prefer_typst_fit": bool(body_flags.get(index, False) and dense_small_box),
+                "adjacent_collision_risk": False,
+                "adjacent_available_height_pt": None,
             }
         )
 
@@ -198,7 +432,7 @@ def build_render_blocks(
         body_pressure_median = median(body_pressure_values) if body_pressure_values else 0.0
 
         for payload in body_payloads:
-            payload["font_size_pt"] = round(min(max(payload["font_size_pt"], body_font_median - 0.12), body_font_median + 0.12), 2)
+            payload["font_size_pt"] = round(min(max(payload["font_size_pt"], body_font_median - 0.10), body_font_median + 0.14), 2)
             inner_height = max(8.0, payload["inner_bbox"][3] - payload["inner_bbox"][1])
             inner_width = max(8.0, payload["inner_bbox"][2] - payload["inner_bbox"][0])
             demand = text_demand_units(payload["translated_text"], payload["formula_map"])
@@ -217,6 +451,7 @@ def build_render_blocks(
                 steps = min(3, max(1, ceil((pressure_ratio - pressure_trigger) / 0.26)))
                 payload["font_size_pt"] = round(max(body_font_median - 0.34, payload["font_size_pt"] - steps * 0.08), 2)
                 payload["leading_em"] = round(min(BODY_LEADING_MAX, payload["leading_em"] + 0.01 * min(steps, 2)), 2)
+                payload["prefer_typst_fit"] = True
                 estimated_height = estimated_render_height_pt(
                     payload["inner_bbox"],
                     payload["translated_text"],
@@ -225,20 +460,8 @@ def build_render_blocks(
                     payload["leading_em"],
                 )
                 density = estimated_height / inner_height
-            if (payload["heavy_dense_small_box"] and density > body_density_target + 0.04) or density > body_density_target + 0.1 or (
-                density > body_density_target + 0.06 and payload["dense_small_box"] and pressure_ratio > BODY_PRESSURE_TIGHTEN_TRIGGER_HIGH
-            ):
-                font_size_pt, leading_em = fit_block_to_vertical_limit(
-                    {**payload["item"], "_is_body_text_candidate": True},
-                    payload["translated_text"],
-                    payload["formula_map"],
-                    payload["font_size_pt"],
-                    payload["leading_em"],
-                    inner_height * body_density_target,
-                    page_body_font_size_pt=payload["page_body_font_size_pt"],
-                )
-                payload["font_size_pt"] = font_size_pt
-                payload["leading_em"] = leading_em
+            if density > body_density_target + 0.06 and payload["dense_small_box"] and pressure_ratio > BODY_PRESSURE_TIGHTEN_TRIGGER_HIGH:
+                payload["prefer_typst_fit"] = True
             elif density < body_density_target - 0.12 and pressure_ratio < 0.94:
                 steps = min(2, max(1, ceil((body_density_target - density) / 0.12)))
                 payload["font_size_pt"] = round(min(body_font_median + 0.08, payload["font_size_pt"] + steps * 0.04), 2)
@@ -255,24 +478,8 @@ def build_render_blocks(
                 payload["leading_em"],
             )
             density = estimated_height / inner_height
-            if (
-                (payload["heavy_dense_small_box"] and density > BODY_FINAL_FORCE_FIT_DENSITY)
-                or (
-                    payload["dense_small_box"]
-                    and density > BODY_FINAL_FORCE_FIT_DENSITY + BODY_FINAL_FORCE_FIT_NON_HEAVY_EXTRA_MARGIN
-                )
-            ):
-                font_size_pt, leading_em = fit_block_to_vertical_limit(
-                    {**payload["item"], "_is_body_text_candidate": True},
-                    payload["translated_text"],
-                    payload["formula_map"],
-                    payload["font_size_pt"],
-                    payload["leading_em"],
-                    inner_height * BODY_FINAL_VERTICAL_TARGET_RATIO,
-                    page_body_font_size_pt=body_font_median,
-                )
-                payload["font_size_pt"] = font_size_pt
-                payload["leading_em"] = leading_em
+            if payload["heavy_dense_small_box"] and density > BODY_FINAL_FORCE_FIT_DENSITY:
+                payload["prefer_typst_fit"] = True
 
         body_font_median = median(payload["font_size_pt"] for payload in body_payloads)
         for payload in body_payloads:
@@ -338,47 +545,30 @@ def build_render_blocks(
                     2,
                 )
 
-        # Smooth adjacent long body blocks in the same column to avoid obvious font/leading jumps on pages like the abstract page.
-        for prev_payload, next_payload in zip(ordered_payloads, ordered_payloads[1:]):
-            if prev_payload["item"].get("block_type") != "text" or next_payload["item"].get("block_type") != "text":
+        # Smooth body text with its true nearest vertical neighbor in the same column.
+        # This avoids obvious within-page jumps without forcing dense / extreme blocks
+        # back into an unsafe size band.
+        body_payloads_by_top = sorted(body_payloads, key=lambda payload: (payload["inner_bbox"][1], payload["inner_bbox"][0]))
+        smoothed_pairs: set[tuple[int, int]] = set()
+        for index, current in enumerate(body_payloads_by_top):
+            best_next = None
+            best_key = None
+            for nxt in body_payloads_by_top[index + 1 :]:
+                if not _is_same_column_adjacent_body_pair(current, nxt, page_text_width_med=page_text_width_med):
+                    continue
+                gap = max(-4.0, _payload_inner_top(nxt) - _payload_inner_bottom(current))
+                center_delta = abs(_payload_center_x(current) - _payload_center_x(nxt))
+                key = (gap, center_delta)
+                if best_key is None or key < best_key:
+                    best_key = key
+                    best_next = nxt
+            if best_next is None:
                 continue
-            prev_h = max(8.0, prev_payload["inner_bbox"][3] - prev_payload["inner_bbox"][1])
-            next_h = max(8.0, next_payload["inner_bbox"][3] - next_payload["inner_bbox"][1])
-            prev_w = max(8.0, prev_payload["inner_bbox"][2] - prev_payload["inner_bbox"][0])
-            next_w = max(8.0, next_payload["inner_bbox"][2] - next_payload["inner_bbox"][0])
-            if prev_h < 90 or next_h < 90:
+            pair_key = (id(current), id(best_next))
+            if pair_key in smoothed_pairs:
                 continue
-            if min(prev_w, next_w) / max(prev_w, next_w) < 0.88:
-                continue
-            if abs(prev_payload["inner_bbox"][0] - next_payload["inner_bbox"][0]) > 14:
-                continue
-            prev_density = estimated_render_height_pt(
-                prev_payload["inner_bbox"],
-                prev_payload["translated_text"],
-                prev_payload["formula_map"],
-                prev_payload["font_size_pt"],
-                prev_payload["leading_em"],
-            ) / prev_h
-            next_density = estimated_render_height_pt(
-                next_payload["inner_bbox"],
-                next_payload["translated_text"],
-                next_payload["formula_map"],
-                next_payload["font_size_pt"],
-                next_payload["leading_em"],
-            ) / next_h
-            if prev_density > 1.0 or next_density > 1.0:
-                continue
-            shared_font = round((prev_payload["font_size_pt"] + next_payload["font_size_pt"]) / 2.0, 2)
-            shared_leading = round((prev_payload["leading_em"] + next_payload["leading_em"]) / 2.0, 2)
-            for payload in (prev_payload, next_payload):
-                payload["font_size_pt"] = round(
-                    min(max(payload["font_size_pt"], shared_font - 0.08), shared_font + 0.08),
-                    2,
-                )
-                payload["leading_em"] = round(
-                    min(max(payload["leading_em"], shared_leading - 0.03), shared_leading + 0.03),
-                    2,
-                )
+            _smooth_adjacent_body_pair(current, best_next)
+            smoothed_pairs.add(pair_key)
 
     for current, nxt in zip(ordered_payloads, ordered_payloads[1:]):
         current_left, current_top_y, current_right, _ = current["inner_bbox"]
@@ -402,30 +592,30 @@ def build_render_blocks(
             current["font_size_pt"],
             current["leading_em"],
         )
-        current_inner_height = max(8.0, current_bottom - current_top)
-        current_density = estimated_height / current_inner_height
-        # Only use this pass as a last-resort guard when source boxes are already
-        # nearly touching and the current block is visually dense. Otherwise it
-        # causes unnecessary page-local font drift.
-        if source_gap > 0 and current_density < VERTICAL_COLLISION_DENSITY_TRIGGER:
+        if estimated_height <= max_height_pt * VERTICAL_COLLISION_TRIGGER_RATIO:
             continue
-        if estimated_height <= max_height_pt * VERTICAL_COLLISION_OVERFLOW_TRIGGER:
-            continue
-        original_font_size = current["font_size_pt"]
-        original_leading = current["leading_em"]
-        font_size_pt, leading_em = fit_block_to_vertical_limit(
-            {**current["item"], "_is_body_text_candidate": current["is_body"]},
-            current["translated_text"],
-            current["formula_map"],
-            current["font_size_pt"],
-            current["leading_em"],
-            max_height_pt,
-            page_body_font_size_pt=current["page_body_font_size_pt"],
-        )
-        current["font_size_pt"] = max(font_size_pt, round(original_font_size - 0.08, 2))
-        current["leading_em"] = max(leading_em, round(original_leading - 0.02, 2))
+        current["adjacent_collision_risk"] = True
+        previous_limit = current.get("adjacent_available_height_pt")
+        if previous_limit is None or max_height_pt < previous_limit:
+            current["adjacent_available_height_pt"] = max_height_pt
 
     for payload in sorted(block_payloads, key=lambda payload: payload["index"]):
+        fit_to_box, fit_min_font_size_pt, fit_min_leading_em = resolve_typst_binary_fit(
+            {
+                **payload["item"],
+                "_is_body_text_candidate": payload["is_body"],
+                "_dense_small_box": payload["dense_small_box"],
+                "_heavy_dense_small_box": payload["heavy_dense_small_box"],
+            },
+            payload["translated_text"],
+            payload["formula_map"],
+            payload["font_size_pt"],
+            payload["leading_em"],
+            page_body_font_size_pt=payload["page_body_font_size_pt"],
+            prefer_typst_fit=payload["prefer_typst_fit"],
+            adjacent_collision_risk=payload["adjacent_collision_risk"],
+            adjacent_available_height_pt=payload["adjacent_available_height_pt"],
+        )
         blocks.append(
             RenderBlock(
                 block_id=f"item-{payload['index']}",
@@ -436,6 +626,9 @@ def build_render_blocks(
                 render_kind=payload["render_kind"],
                 font_size_pt=payload["font_size_pt"],
                 leading_em=payload["leading_em"],
+                fit_to_box=fit_to_box and payload["render_kind"] == "markdown" and payload["is_body"],
+                fit_min_font_size_pt=fit_min_font_size_pt,
+                fit_min_leading_em=fit_min_leading_em,
             )
         )
     return blocks

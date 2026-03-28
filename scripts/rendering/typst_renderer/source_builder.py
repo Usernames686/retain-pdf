@@ -11,6 +11,53 @@ from rendering.typst_renderer.shared import MITEX_VERSION
 from rendering.typst_renderer.shared import escape_typst_string
 
 
+def _fit_markdown_typst_helpers() -> list[str]:
+    return [
+        "#let pdftr_fit_size(lo, hi, eps, fits) = {",
+        "  if hi - lo <= eps {",
+        "    lo",
+        "  } else {",
+        "    let mid = lo + (hi - lo) / 2",
+        "    if fits(mid) {",
+        "      pdftr_fit_size(mid, hi, eps, fits)",
+        "    } else {",
+        "      pdftr_fit_size(lo, mid, eps, fits)",
+        "    }",
+        "  }",
+        "}",
+        "#let pdftr_floor_size(value, floor) = if value < floor { floor } else { value }",
+        "#let pdftr_floor_leading(value, floor) = if value < floor { floor } else { value }",
+        "#let pdftr_fit_markdown(markdown, max_size: 10pt, min_size: 9pt, max_leading: 0.66em, min_leading: 0.54em, eps: 0.08pt) = {",
+        "  layout(size => {",
+        "    let render(text_size, leading) = block(width: size.width)[#{",
+        "      set text(size: text_size)",
+        "      set par(leading: leading)",
+        "      cmarker.render(markdown, math: mitex)",
+        "    }]",
+        "    let fits(text_size, leading) = measure(width: size.width, render(text_size, leading)).height <= size.height",
+        "    if fits(max_size, max_leading) {",
+        "      render(max_size, max_leading)",
+        "    } else {",
+        "      let chosen_leading = if fits(min_size, max_leading) { max_leading } else { min_leading }",
+        "      let chosen_size = if not fits(min_size, chosen_leading) {",
+        "        let fallback_min_size = pdftr_floor_size(min_size - 0.8pt, 6.4pt)",
+        "        let fallback_min_leading = pdftr_floor_leading(chosen_leading - 0.06em, 0.18em)",
+        "        if not fits(fallback_min_size, fallback_min_leading) {",
+        "          fallback_min_size",
+        "        } else {",
+        "          pdftr_fit_size(fallback_min_size, min_size, eps, size_pt => fits(size_pt, fallback_min_leading))",
+        "        }",
+        "      } else {",
+        "        pdftr_fit_size(min_size, max_size, eps, size_pt => fits(size_pt, chosen_leading))",
+        "      }",
+        "      let final_leading = if not fits(min_size, chosen_leading) { pdftr_floor_leading(chosen_leading - 0.06em, 0.18em) } else { chosen_leading }",
+        "      render(chosen_size, final_leading)",
+        "    }",
+        "  })",
+        "}",
+    ]
+
+
 def _build_typst_block(block_id: str, block: RenderBlock) -> str:
     var_prefix = block_id.replace("-", "_")
     x0, y0, x1, y1 = block.inner_bbox
@@ -38,6 +85,16 @@ def _build_typst_block(block_id: str, block: RenderBlock) -> str:
     markdown_name = f"{var_prefix}_md"
     body_name = f"{var_prefix}_body"
     markdown = block.markdown_text
+    if block.fit_to_box:
+        fit_min_font = max(1.0, min(block.fit_min_font_size_pt or font_size, font_size))
+        fit_min_leading = max(0.1, min(block.fit_min_leading_em or leading, leading))
+        return (
+            f'#let {markdown_name} = "{escape_typst_string(markdown)}"\n'
+            f"#let {body_name} = block(width: {width}pt, height: {height}pt)[#{{ pdftr_fit_markdown({markdown_name}, max_size: {font_size}pt, min_size: {fit_min_font}pt, max_leading: {leading}em, min_leading: {fit_min_leading}em) }}]\n"
+            "#context {\n"
+            f"  place(top + left, dx: {x0}pt, dy: {y0}pt, {body_name})\n"
+            "}"
+        )
     return (
         f'#let {markdown_name} = "{escape_typst_string(markdown)}"\n'
         f"#let {body_name} = block(width: {width}pt)[#{{ set text(size: {font_size}pt); set par(leading: {leading}em); cmarker.render({markdown_name}, math: mitex) }}]\n"
@@ -79,6 +136,7 @@ def build_typst_book_overlay_source(
         f'#import "@preview/mitex:{MITEX_VERSION}": mitex',
         '#show math.equation.where(block: false): set math.frac(style: "horizontal")',
     ]
+    lines.extend(_fit_markdown_typst_helpers())
 
     for page_index, (page_width, page_height, translated_items) in enumerate(page_specs):
         render_blocks = build_render_blocks(translated_items, page_width=page_width, page_height=page_height)
@@ -104,6 +162,7 @@ def build_typst_book_background_source(
         f'#import "@preview/mitex:{MITEX_VERSION}": mitex',
         '#show math.equation.where(block: false): set math.frac(style: "horizontal")',
     ]
+    lines.extend(_fit_markdown_typst_helpers())
 
     for page_index, (source_page_idx, page_width, page_height, translated_items) in enumerate(page_specs):
         render_blocks = build_render_blocks(translated_items, page_width=page_width, page_height=page_height)
