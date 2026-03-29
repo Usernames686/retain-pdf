@@ -164,7 +164,11 @@ def apply_reference_zone_skip(
         return 0
 
     skipped = 0
-    previous_reference_item = page_idx > cutoff_page_idx
+    # Do not assume every page after the cutoff is still inside references.
+    # That causes chapter body lines like "where ..." / "and ..." to be
+    # misclassified as reference continuations once the book moves past the
+    # bibliography pages.
+    previous_reference_item = False
     for item in payload:
         item_page_idx = item.get("page_idx", page_idx)
         block_idx = item.get("block_idx", -1)
