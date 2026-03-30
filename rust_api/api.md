@@ -6,6 +6,12 @@
 
 - [frontend_request_example.md](/home/wxyhgk/tmp/Code/rust_api/frontend_request_example.md)
 
+当前 Rust API 在后端会调用 Python 入口脚本：
+
+- `scripts/entrypoints/run_mineru_case.py`
+
+也就是说，`rust_api` 负责对外服务、任务排队和状态落库，实际 PDF 主链路仍由 Python worker 执行。
+
 ## 1. 基础信息
 
 - 服务职责：提供上传、创建翻译任务、查询任务状态、下载 PDF / Markdown / Bundle、取消任务等对外 API。
