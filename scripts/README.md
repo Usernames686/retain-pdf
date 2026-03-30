@@ -1,654 +1,119 @@
-# Scripts Overview
+# Scripts 总览
 
-This directory contains the OCR translation and PDF rendering pipeline.
+`scripts/` 是整套“PDF -> OCR -> 翻译 -> 保留排版渲染”的脚本工程目录。
 
-Current status:
+现在顶层按职责分成五层：
 
-- paragraph-based Typst rendering is the default path
-- default Typst Chinese font is `Source Han Serif SC`
-- body layout tuning can be overridden from CLI without editing code
-- current stable body-text strategy is: Chinese-first leading, page-level body font unification, emergency fallback only for true overflow blocks
-- `list` child blocks are extracted and rendered item-by-item
-- `inline_equation` is preserved via placeholders during translation
-- `ref_text` is skipped and not sent to translation
-- `image`, `image_body`, `image_caption`, `table_caption`, and `table_footnote` are left untouched in the stable sci pipeline
-- translation supports DeepSeek and OpenAI-compatible local endpoints
-- translation now supports concurrent batch workers and HTTP session reuse
-- full-book translation now supports continuation groups across page boundaries
-- continuation handling now uses a fast rule pass first, then only sends ambiguous candidate pairs to the model for review
-- payloads now also carry orchestration metadata such as `layout_mode`, `layout_zone`, `skip_reason`, and `translation_unit_id`
-- grouped translation/rendering now explicitly runs on `translation_unit_id`, while `continuation_group` remains only as one source of unit formation
-- `precise` mode adds LLM block classification for suspicious OCR text blocks before translation
-- `fast` and `sci` do not run the classifier; they rely on OCR block types plus skip policies
-- `sci` mode can infer the document domain from the first two PDF pages and inject document-specific guidance into later translation batches
-- full-book Typst build now compiles page overlays in parallel
-- if a page hits unsupported Typst math, that page falls back to plain-text overlay instead of failing the whole book
+- `runtime/`
+  运行时编排层，只放 pipeline。
+- `services/`
+  OCR、MinerU、翻译、渲染等具体实现层。
+- `foundation/`
+  配置、共享工具和提示词资源。
+- `entrypoints/`
+  人工执行入口。
+- `devtools/`
+  实验、迁移、示例、测试探针、诊断脚本。
 
-## Layout
+## 主链路
 
-- `build_page.py`
-  Build one translated preview page.
-- `build_book.py`
-  Build a translated multi-page PDF from per-page translation JSON files.
-- `translate_page.py`
-  Translate one page with a configurable OpenAI-compatible API.
-- `translate_book.py`
-  Translate a page range or the full book with a configurable OpenAI-compatible API.
-- `run_book.py`
-  Translate and render a full book in one page-by-page pipeline.
-- `run_case.py`
-  Simplest one-command entry: point it at a folder containing exactly one `.json` and one `.pdf`, and it auto-discovers inputs, auto-names outputs, then runs the full pipeline.
-- `run_mineru_case.py`
-  Recommended one-command MinerU entry at the top level. Parse with MinerU, translate from `layout.json`, and render into one structured job directory by reusing `mineru/mineru_pipeline.py`.
-- `mineru/mineru_api.py`
-  Minimal MinerU precise-API caller. Supports both remote URL task submission and local-file upload + polling.
-- `mineru/mineru_api_example.py`
-  Lightweight URL-only MinerU example: submit a task and poll until done.
+核心流程可以概括成：
 
-### `common/`
+`PDF -> services/mineru -> services/translation -> services/rendering -> PDF`
 
-- `prompt_loader.py`
-  Loads editable prompt files from `scripts/prompts/`.
-- `job_dirs.py`
-  Creates structured output directories such as `source`, `ocr`, `translated`, and `typst`.
-- `local_env.py`
-  Loads local secrets and environment variables from `scripts/.env/`.
+更具体一点：
 
-### `config/`
+1. 如果只有 PDF，先由 `services/mineru` 获取并解包 `layout.json`
+2. `services/translation/ocr` 读取 OCR 结果并抽取页面块
+3. `services/translation/orchestration` 补齐布局区、continuation、translation_unit 元数据
+4. `services/translation` 生成每页翻译 JSON
+5. `services/rendering` 读取翻译 JSON 并生成最终 PDF
+6. `runtime/pipeline` 负责把这些阶段编排成稳定总线
 
-- `paths.py`
-  Centralized path constants such as `OUTPUT_DIR`, `SOURCE_JSON`, and cache locations.
-- `fonts.py`
-  Font family, font path, and font-size defaults shared by the pipeline.
-- `layout.py`
-  Layout tuning defaults and the mutable `apply_layout_tuning(...)` entry.
-- `runtime.py`
-  Runtime defaults such as output names and PDF compression DPI.
+## 推荐入口
 
-### `translation/ocr/`
+日常使用优先走这些入口：
 
-- `json_extractor.py`
-  Reads OCR JSON and extracts page/block text items. Skips `interline_equation`, `code`, `table`, `ref_text`, `image`, `image_body`, `image_caption`, `table_caption`, and `table_footnote`.
-- `models.py`
-  OCR-side data structures.
+- `scripts/entrypoints/run_case.py`
+  已经有 OCR JSON 和 PDF 时，直接跑完整流程。
+- `scripts/entrypoints/run_mineru_case.py`
+  只有 PDF 时，先跑 MinerU，再翻译，再渲染。
+- `scripts/entrypoints/translate_book.py`
+  只翻译，不渲染。
+- `scripts/entrypoints/build_book.py`
+  只渲染，不重新翻译。
+- `scripts/entrypoints/run_book.py`
+  显式给出 JSON 和 PDF 的完整编排入口。
+- `scripts/entrypoints/build_page.py`
+  单页渲染调试入口。
+- `scripts/entrypoints/translate_page.py`
+  单页翻译调试入口。
+- `scripts/entrypoints/check_math_cases.py`
+  公式归一化回归检查。
 
-### `translation/`
+## 顶层目录说明
 
-- `deepseek_client.py`
-  Translation API client for DeepSeek or any OpenAI-compatible endpoint, with per-thread `requests.Session()` reuse.
-- `formula_protection.py`
-  Protects inline formulas with placeholders during translation.
-- `translations.py`
-  Translation JSON template/load/save helpers.
-- `translation_workflow.py`
-  Shared translation workflow for page/book translation commands, including concurrent batch workers.
-- `domain_context.py`
-  In `sci` mode, infers the document domain from the first two PDF pages and generates translation guidance for the rest of the book.
-- `continuations.py`
-  Detects likely paragraph continuations, including cross-page continuation groups for full-book runs.
+- `services/mineru`
+  MinerU 接入、下载、解包、job 组织。
+- `services/translation`
+  OCR payload 到翻译 JSON。
+- `services/rendering`
+  翻译 JSON 到 PDF。
+- `runtime/pipeline`
+  翻译和渲染的总编排层。
+- `services/README.md`
+  具体能力实现层总说明。
+- `foundation/config`
+  路径、字体、版式和运行时默认配置。
+- `foundation/shared`
+  输入解析、job 目录、环境变量、提示词加载等共享能力。
+- `foundation/prompts`
+  可编辑提示词模板。
+- `devtools/experiments`
+  实验性流程，不属于稳定主链路。
+- `devtools/tests`
+  测试探针和排版实验。
+- `devtools/tools`
+  示例脚本、迁移工具和诊断脚本。
 
-### `translation/orchestration/`
+## 结构化输出
 
-- `zones.py`
-  Shared page-layout helpers. Detects single/double-column structure and annotates each payload item with a layout zone.
-- `units.py`
-  Normalizes orchestration-facing payload fields such as `skip_reason` and `translation_unit_id`.
-- `document_orchestrator.py`
-  Lightweight document orchestration layer that keeps layout-zone annotation, candidate continuation review, and payload finalization out of rendering.
-
-### `pipeline/`
-
-- `book_pipeline.py`
-  Thin entry layer for translate/build/run-book orchestration.
-- `book_translation_flow.py`
-  Full-book translation orchestration, including template loading, global continuation grouping, policy application, batched translation, and page JSON persistence.
-
-### `translation/classification/`
-
-- `page_classifier.py`
-  Lightweight LLM classification for suspicious OCR blocks. The model returns line-based labels like `item_id => translate`.
-
-### `prompts/`
-
-- `classification_system.txt`
-  System prompt for precise-mode page classification.
-- `translation_system.txt`
-  System prompt for translation.
-- `translation_task.txt`
-  Task text injected into the translation user payload.
-- `domain_inference_system.txt`
-  System prompt for first-two-pages domain inference in `sci` mode.
-- `domain_inference_task.txt`
-  Task text for domain-aware translation guidance generation.
-
-### `rendering/`
-
-- `render_payloads.py`
-  Converts translated items into render-ready paragraph blocks, normalizes OCR math for Typst, and distributes continuation-group text back into multiple original OCR boxes.
-- `pdf_overlay.py`
-  Legacy direct PDF text/image overlay helpers.
-- `typst_formula_renderer.py`
-  Formula rendering helpers used by the legacy overlay path.
-- `typst_page_renderer.py`
-  Current Typst-based paragraph renderer using `cmarker + mitex`, with page-level compile fallback, parallel book build support, and side-by-side dual PDF output.
-
-## Current Rendering Path
-
-The current preferred path is:
-
-`OCR JSON -> translation JSON -> render_payloads -> typst_page_renderer -> PDF`
-
-For the simplest day-to-day usage, prefer the top-level one-step entry for local OCR JSON/PDF cases:
-
-```bash
-python scripts/run_case.py \
-  --source-json Data/test3/test3.json \
-  --source-pdf Data/test3/test3.pdf \
-  --mode sci \
-  --model deepseek-chat \
-  --base-url https://api.deepseek.com/v1 \
-  --api-key "$DEEPSEEK_API_KEY" \
-  --workers 50 \
-  --output-dir translations/test3-run \
-  --output test3-run.pdf
-```
-
-This will:
-
-- translate the whole document
-- render the final PDF
-- write translation JSONs under `output/translations/`
-- write the final PDF under `output/`
-
-## CLI Usage
-
-Use these commands from the repo root:
-
-```bash
-cd /home/wxyhgk/tmp/Code
-```
-
-Recommended default entry:
-
-```bash
-python scripts/run_case.py \
-  --source-json Data/test9/test9.json \
-  --source-pdf Data/test9/test9.pdf \
-  --mode sci \
-  --model deepseek-chat \
-  --base-url https://api.deepseek.com/v1 \
-  --api-key "$DEEPSEEK_API_KEY" \
-  --workers 50 \
-  --output-dir translations/test9-run \
-  --output test9-run.pdf
-```
-
-Recommended MinerU one-step entry:
-
-```bash
-python scripts/run_mineru_case.py \
-  --file-path Data/test9/test9.pdf \
-  --model-version vlm \
-  --mode sci \
-  --model Q3.5-turbo \
-  --base-url http://1.94.67.196:10001/v1
-```
-
-What each main CLI is for:
-
-- `run_case.py`
-  Recommended daily/API entry. Prefer explicit `--source-json`, `--source-pdf`, `--output-dir`, and `--output`. It also supports one fallback `input_dir` for local convenience.
-- `run_book.py`
-  Full end-to-end entry when you want to pass the JSON path, PDF path, output folder, and output PDF name explicitly.
-- `run_mineru_case.py`
-  Recommended MinerU daily entry. Use this when the source is still a PDF and you want `parse -> unpack -> translate -> render` in one command from the `scripts/` top level.
-- `translate_book.py`
-  Translate only. Use this when you want to keep translation JSONs and rebuild multiple times without paying translation cost again.
-- `build_book.py`
-  Build only from existing translation JSONs.
-- `translate_page.py` / `build_page.py`
-  Single-page debugging tools.
-
-Current mode behavior:
-
-- `fast`
-  Fast general mode. No classifier.
-- `sci`
-  Recommended for papers. No classifier. It also infers document domain from the first two PDF pages and skips document tail after the last title.
-- `precise`
-  Experimental high-precision mode. This is the only mode that enables the LLM classifier for suspicious OCR blocks.
-
-Common output behavior:
-
-- translation JSONs are written under `output/translations/...`
-- final PDFs are written under `output/...`
-- if you omit `--end-page`, the full document is processed
-- the default render mode is `typst`
-- `--render-mode dual` outputs side-by-side pages: left original, right translated
-- MinerU integrated flows can also write everything into one structured job directory under `output/<job-id>/`
-
-Current structured layout:
+任务输出统一落到：
 
 - `output/<job-id>/source`
 - `output/<job-id>/ocr`
 - `output/<job-id>/translated`
 - `output/<job-id>/typst`
 
-Legacy jobs using `originPDF/jsonPDF/transPDF` remain supported by the backend.
-
-Examples:
-
-Recommended MinerU all-in-one pipeline:
-
-```bash
-python scripts/run_mineru_case.py \
-  --file-path Data/test9/test9.pdf \
-  --model-version vlm \
-  --mode sci \
-  --model Q3.5-turbo \
-  --base-url http://1.94.67.196:10001/v1
-```
-
-This creates:
-
-- `output/<job-id>/source`
-- `output/<job-id>/ocr`
-- `output/<job-id>/translated`
-- `output/<job-id>/typst`
-
-`ocr/unpacked/layout.json` is used as the default MinerU OCR JSON for the translation pipeline.
-
-Low-level MinerU implementation note:
-
-- `scripts/run_mineru_case.py` is the recommended public entry.
-- `scripts/mineru/mineru_pipeline.py` remains the stable implementation it delegates to.
-
-MinerU middle-level job runner, only parse and unpack:
-
-```bash
-python scripts/mineru/mineru_job.py \
-  --file-path Data/test9/test9.pdf \
-  --model-version vlm \
-  --job-id 202603212300-demo
-```
-
-Migrate old `output/mineru/<case>` experiments into the new structured layout:
-
-```bash
-python scripts/mineru/migrate_legacy_output.py \
-  --legacy-root output/mineru/test9 \
-  --job-id 20260321-legacy-mineru-test9
-```
-
-This creates:
-
-- `output/202603212300-demo/source`
-- `output/202603212300-demo/ocr`
-- `output/202603212300-demo/translated`
-- `output/202603212300-demo/typst`
-
-Use MinerU `layout.json` as the main OCR JSON input:
-
-```bash
-python scripts/run_case.py \
-  --source-json output/202603212300-demo/ocr/unpacked/layout.json \
-  --source-pdf output/202603212300-demo/source/test9.pdf \
-  --mode sci \
-  --model Q3.5-turbo \
-  --base-url http://1.94.67.196:10001/v1 \
-  --output-dir 202603212300-demo/translated/translations \
-  --output 202603212300-demo/translated/test9-translated.pdf
-```
-
-Low-level MinerU API script remains available when you only want the raw API response:
-
-```bash
-python scripts/mineru/mineru_api.py \
-  --token "$MINERU_TOKEN" \
-  --file-url "https://cdn-mineru.openxlab.org.cn/demo/example.pdf" \
-  --model-version vlm \
-  --poll \
-  --output-json output/mineru-result.json
-```
-
-Run a whole case folder with DeepSeek:
-
-```bash
-python scripts/run_case.py \
-  --source-json Data/test3/test3.json \
-  --source-pdf Data/test3/test3.pdf \
-  --mode sci \
-  --model deepseek-chat \
-  --base-url https://api.deepseek.com/v1 \
-  --api-key "$DEEPSEEK_API_KEY" \
-  --workers 50 \
-  --output-dir translations/test3-run \
-  --output test3-run.pdf
-```
-
-Run a whole case folder with the self-hosted endpoint:
-
-```bash
-python scripts/run_case.py \
-  --source-json Data/test9/test9.json \
-  --source-pdf Data/test9/test9.pdf \
-  --mode sci \
-  --model Q3.5-turbo \
-  --base-url http://1.94.67.196:10001/v1 \
-  --workers 50 \
-  --output-dir translations/test9-q35 \
-  --output test9-q35.pdf
-```
-
-Fallback auto-discovery mode for local manual use:
-
-```bash
-python scripts/run_case.py Data/test9 \
-  --mode sci \
-  --model deepseek-chat \
-  --base-url https://api.deepseek.com/v1 \
-  --api-key "$DEEPSEEK_API_KEY" \
-  --workers 50
-```
-
-Run with explicit paths instead of a case folder:
-
-```bash
-python scripts/run_book.py \
-  --source-json Data/test1/test1.json \
-  --source-pdf Data/test1/test1.pdf \
-  --mode sci \
-  --batch-size 6 \
-  --workers 4 \
-  --base-url http://1.94.67.196:10001/v1 \
-  --model Q3.5-turbo \
-  --output-dir translations/test1-run \
-  --output test1-run.pdf
-```
-
-Translate first, then rebuild repeatedly:
-
-```bash
-python scripts/translate_book.py \
-  --source-json Data/test1/test1.json \
-  --source-pdf Data/test1/test1.pdf \
-  --mode sci \
-  --batch-size 6 \
-  --workers 4 \
-  --base-url http://1.94.67.196:10001/v1 \
-  --model Q3.5-turbo \
-  --output-dir translations/test1-q35
-
-python scripts/build_book.py \
-  --translations-dir translations/test1-q35 \
-  --source-pdf Data/test1/test1.pdf \
-  --output test1-q35.pdf \
-  --render-mode typst
-```
-
-Rendering is paragraph-based:
-
-- use the paragraph `bbox`
-- join text and inline formulas into one Markdown paragraph
-- for continuation groups, translate once and flow the result back across multiple OCR boxes, including cross-page cases
-- render with Typst `cmarker + mitex`
-- build one combined Typst overlay for the whole selected page range by default
-- for editable PDFs, remove original text without white fill before overlaying Chinese
-- for image-style PDFs, keep white redaction fill as fallback
-- if the combined Typst build fails, fall back to page-level plain-text-safe overlay compilation
-
-Inline formula coordinates are not used directly in the current Typst path.
-
-## Font Strategy
-
-The current font-fitting strategy is based on two expert conclusions:
-
-- do not chase the original English point size directly
-- instead, reproduce the original block's rhythm and occupied area with the target Chinese font in Typst
-
-Current engineering rules:
-
-- `title` is handled separately and is not used as the body-text baseline
-- `table`, `image`, `image_body`, `code`, `ref_text`, and `interline_equation` do not participate in Chinese font fitting
-- body text is estimated from OCR geometry, not from translation length alone
-- the main signal is `line pitch` from `line.bbox` center-to-center distance
-- `line height` is only a fallback signal
-- original OCR block `bbox` is not treated as the final usable text box directly
-- rendering uses a conservative `inner_bbox` to avoid fat-looking paragraphs caused by OCR padding
-- page-level baseline is preferred over aggressive per-block font drift
-- block-level scaling is allowed only in a very narrow range
-
-What we learned from the two experts:
-
-- Expert 1:
-  use page-level baseline plus small block-level adjustment
-- Expert 2:
-  the real target is line rhythm and occupied ratio, not source English font size
-- Shared conclusion:
-  line geometry matters more than raw text length or translated character count
-
-Practical consequences in the code:
-
-- body text should look uniform inside the same page/column
-- font variation should be small, not zero and not large
-- line spacing should stay in a narrow band instead of using a loose global default
-- `inner_bbox` is often more important than another `0.2pt` font tweak
-
-Runtime tuning knobs:
-
-- `--body-font-size-factor`
-- `--body-leading-factor`
-- `--inner-bbox-shrink-x`
-- `--inner-bbox-shrink-y`
-- `--inner-bbox-dense-shrink-x`
-- `--inner-bbox-dense-shrink-y`
-
-What we are not doing on purpose:
-
-- no attempt to recover the original PDF font family
-- no per-span font restoration
-- no strong dependence on AI output length differences between models
-
-The current direction is:
-
-- stable page-level body-text size
-- small elasticity only
-- rhythm-first fitting using OCR line geometry
-- Chinese-first body leading instead of tight OCR-English leading lock-in
-- page-level body font unification with emergency fallback only for true overflow blocks
-- continue improving body-text detection before touching non-body blocks
-
-## Translation Rules
-
-- translate natural-language text blocks
-- keep inline formulas untouched through placeholder protection
-- do not translate `interline_equation`
-- do not translate `code`
-- do not translate `table`
-- do not translate `ref_text`
-- do not translate `image`
-- do not translate `image_body`
-- do not translate `image_caption`
-- do not translate `table_caption`
-- do not translate `table_footnote`
-
-In `precise` mode:
-
-- only suspicious OCR blocks are sent to the classifier
-- the classifier returns only `translate`, `code`, or `skip`
-- no original OCR structure is rewritten
-- non-`translate` items stay untouched in the output PDF
-
-## Build Strategy
-
-For full-book PDF generation, the current strategy is:
-
-- translate page-by-page into per-page JSON
-- build one combined Typst overlay for the selected page range
-- remove original text directly for editable PDFs before overlaying Chinese
-- use white redaction fill only for image-style PDFs
-- if the combined build fails on a Typst issue, fall back to page-level compilation
-- page-level fallback can still compile pages in parallel when needed
-
-This is currently the best size / stability tradeoff we found. Experiments with extra pre-subset font assets did not reduce the final PDF size in this pipeline, so they are not part of the main route.
-
-## Continuation Groups
-
-The current full-book path supports logical paragraphs that were split by OCR:
-
-- same-page continuation:
-  left-column bottom -> right-column top
-- cross-page continuation:
-  previous page tail -> next page head
-- single-column continuation:
-  lower block -> next page first block
-
-The rule is based on reading-order adjacency plus sentence-continuation heuristics. When a continuation group is detected:
-
-- the group is translated as one paragraph
-- the translated result is stored once at group level
-- rendering redistributes that paragraph into the original boxes in order
-- original English text is redacted from every box in the group before Chinese overlay
-
-## Recommended Endpoints
-
-- local OpenAI-compatible endpoint:
-  `http://1.94.67.196:10001/v1`
-- tested local model:
-  `Q3.5-turbo`
-- DeepSeek model:
-  `deepseek-chat`
-
-Recent end-to-end benchmark on pages 1-20:
-
-- local `Q3.5-turbo`, `batch-size=6`, `workers=4`:
-  about `75.90s` total
-- DeepSeek `deepseek-chat`, same workload:
-  about `249.25s` total
-
-## Common Commands
-
-Build page 6 from an existing translation JSON:
-
-```bash
-python scripts/build_page.py \
-  --page 5 \
-  --translation-json old/translations/page-6-deepseek-v3.json \
-  --output dev-6-check.pdf \
-  --single-page \
-  --render-mode typst
-```
-
-Build a book preview from archived translations:
-
-```bash
-python scripts/build_book.py \
-  --translations-dir old/translations/book \
-  --output dev-book-preview.pdf \
-  --start-page 0 \
-  --end-page 18 \
-  --compile-workers 12
-```
-
-Build a dual preview with original pages on the left and translated pages on the right:
-
-```bash
-python scripts/build_book.py \
-  --translations-dir translations/test1-run \
-  --source-pdf Data/test1/test1.pdf \
-  --start-page 0 \
-  --end-page 1 \
-  --output test1-dual-preview.pdf \
-  --render-mode dual
-```
-
-Translate one page:
-
-```bash
-python scripts/translate_page.py --page 5 --batch-size 4 --workers 2
-```
-
-Translate one page with precise classification:
-
-```bash
-python scripts/translate_page.py \
-  --page 5 \
-  --mode precise \
-  --classify-batch-size 8 \
-  --batch-size 4 \
-  --workers 2
-```
-
-Translate a page range:
-
-```bash
-python scripts/translate_book.py --start-page 0 --end-page 19 --batch-size 6 --workers 4
-```
-
-Use the self-hosted OpenAI-compatible endpoint:
-
-```bash
-python scripts/translate_page.py \
-  --page 5 \
-  --batch-size 4 \
-  --workers 2 \
-  --base-url http://1.94.67.196:10001/v1 \
-  --model Q3.5-turbo
-```
-
-Translate and build the full book with the local endpoint:
-
-```bash
-python scripts/translate_book.py \
-  --start-page 0 \
-  --end-page 19 \
-  --batch-size 6 \
-  --workers 4 \
-  --base-url http://1.94.67.196:10001/v1 \
-  --model Q3.5-turbo \
-  --output-dir translations/book-q35
-
-python scripts/build_book.py \
-  --translations-dir translations/book-q35 \
-  --output book-q35.pdf \
-  --start-page 0 \
-  --end-page 19 \
-  --compile-workers 24
-```
-
-Run the page-by-page pipeline in one command:
-
-```bash
-python scripts/run_book.py \
-  --source-json Data/test1/test1.json \
-  --source-pdf Data/test1/test1.pdf \
-  --mode precise \
-  --batch-size 6 \
-  --workers 4 \
-  --base-url http://1.94.67.196:10001/v1 \
-  --model Q3.5-turbo \
-  --output-dir translations/test1-run \
-  --output test1-run.pdf
-```
-
-Run the same pipeline but emit a dual PDF:
-
-```bash
-python scripts/run_book.py \
-  --source-json Data/test1/test1.json \
-  --source-pdf Data/test1/test1.pdf \
-  --mode precise \
-  --batch-size 6 \
-  --workers 4 \
-  --base-url http://1.94.67.196:10001/v1 \
-  --model Q3.5-turbo \
-  --output-dir translations/test1-dual-run \
-  --output test1-dual-run.pdf \
-  --render-mode dual
-```
-
-If you omit `--end-page`, the scripts process the full document by default.
-`run_book.py` defaults to `typst` rendering.
-The current preferred production route is still the Typst path: delete original text on editable PDFs, then apply one combined Typst overlay for the whole book.
-`run_book.py --render-mode dual` and `build_book.py --render-mode dual` output side-by-side pages: left original, right translated.
-`build_book.py` supports `--compile-workers`; `0` means auto, and the current auto mode caps parallel Typst page compilation to a safe upper bound instead of trying to use all CPU threads blindly.
+其中：
+
+- `ocr/unpacked/layout.json` 是翻译阶段默认 OCR 输入
+- `translated/translations` 是中间翻译结果
+- `translated/*.pdf` 是最终输出 PDF
+- `typst/` 保留 Typst 中间产物，便于查错和回溯
+
+兼容说明：
+
+- 旧任务目录如果还是 `originPDF/jsonPDF/transPDF`，当前后端和下载接口仍然兼容
+
+## 子目录文档
+
+- [foundation/config/README.md](./foundation/config/README.md)
+- [foundation/shared/README.md](./foundation/shared/README.md)
+- [runtime/pipeline/README.md](./runtime/pipeline/README.md)
+- [services/README.md](./services/README.md)
+- [services/translation/README.md](./services/translation/README.md)
+- [services/translation/orchestration/README.md](./services/translation/orchestration/README.md)
+- [services/translation/continuation/README.md](./services/translation/continuation/README.md)
+- [services/translation/policy/README.md](./services/translation/policy/README.md)
+- [services/rendering/README.md](./services/rendering/README.md)
+- [services/mineru/README.md](./services/mineru/README.md)
+
+## 设计边界
+
+- `services/translation` 不直接操作 PDF
+- `services/rendering` 不直接决定翻译策略
+- `runtime/pipeline` 负责编排，不下沉到实现细节
+- `foundation/` 不承载具体业务流程
+- `entrypoints/` 只做入口，不承载核心实现
+- `devtools/` 不能反向成为主链路依赖

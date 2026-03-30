@@ -40,7 +40,7 @@ impl AppConfig {
             .context("rust_api must live directly under project root")?
             .to_path_buf();
         let scripts_dir = project_root.join("scripts");
-        let run_mineru_case_script = scripts_dir.join("run_mineru_case.py");
+        let run_mineru_case_script = scripts_dir.join("entrypoints").join("run_mineru_case.py");
         let uploads_dir = rust_api_root.join("uploads");
         let downloads_dir = rust_api_root.join("downloads");
         let jobs_db_path = rust_api_root.join("jobs.db");

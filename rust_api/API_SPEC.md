@@ -2,6 +2,10 @@
 
 `rust_api` is the new external service layer for the PDF translation pipeline.
 
+Its worker side currently delegates to the Python entrypoint:
+
+- `scripts/entrypoints/run_mineru_case.py`
+
 Goals:
 
 - JSON-first API for frontend and third-party integration

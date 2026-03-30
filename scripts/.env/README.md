@@ -1,14 +1,14 @@
-# Local Secrets
+# 本地密钥
 
-Put local tokens in this directory.
+这个目录只放本机开发时使用的密钥文件。
 
-Current convention:
+当前约定：
 
 - `mineru.env`
-  Contains `MINERU_API_TOKEN=...`
+  文件中写入 `MINERU_API_TOKEN=...`
 
-Notes:
+说明：
 
-- real `*.env` files in this directory are ignored by git
-- this directory is only for local development secrets
-- CLI `--token` values still override file-based secrets
+- 目录里的真实 `*.env` 文件已经被 Git 忽略
+- 这里只用于本地开发，不用于对外交付
+- 如果命令行传了 `--token`，仍然以命令行参数为准

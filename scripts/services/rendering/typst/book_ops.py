@@ -1,0 +1,161 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import fitz
+
+from foundation.config import fonts
+from services.rendering.api.pdf_overlay import save_optimized_pdf
+from services.rendering.api.pdf_overlay import strip_page_links
+from services.rendering.typst.book_helpers import build_dual_doc_pages
+from services.rendering.typst.book_helpers import collect_background_page_specs
+from services.rendering.typst.book_helpers import compile_background_pdf_resilient
+from services.rendering.typst.book_helpers import prepare_background_work_dir
+from services.rendering.typst.book_helpers import prepare_single_page_items
+from services.rendering.typst.book_helpers import resolve_typst_temp_root
+from services.rendering.typst.book_helpers import save_background_pdf_to_output
+from services.rendering.typst.overlay_ops import overlay_translated_items_on_page
+from services.rendering.typst.overlay_ops import overlay_translated_pages_on_doc
+
+
+def build_single_page_typst_pdf(
+    source_pdf_path: Path,
+    output_pdf_path: Path,
+    translated_items: list[dict],
+    page_idx: int,
+    api_key: str = "",
+    model: str = "",
+    base_url: str = "",
+    font_family: str = fonts.TYPST_DEFAULT_FONT_FAMILY,
+    font_paths: list[Path] | None = None,
+    temp_root: Path | None = None,
+    cover_only: bool = False,
+) -> None:
+    prepared_items = prepare_single_page_items(translated_items, page_idx)
+    source_doc = fitz.open(source_pdf_path)
+    temp_doc = fitz.open()
+    temp_doc.insert_pdf(source_doc, from_page=page_idx, to_page=page_idx)
+    page = temp_doc[0]
+    strip_page_links(page)
+    overlay_translated_items_on_page(
+        page,
+        prepared_items,
+        stem=f"page-{page_idx + 1}",
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
+        font_family=font_family,
+        font_paths=font_paths,
+        temp_root=resolve_typst_temp_root(output_pdf_path, temp_root),
+        cover_only=cover_only,
+    )
+    save_optimized_pdf(temp_doc, output_pdf_path)
+    temp_doc.close()
+    source_doc.close()
+
+
+def build_book_typst_pdf(
+    source_pdf_path: Path,
+    output_pdf_path: Path,
+    translated_pages: dict[int, list[dict]],
+    compile_workers: int | None = None,
+    api_key: str = "",
+    model: str = "",
+    base_url: str = "",
+    font_family: str = fonts.TYPST_DEFAULT_FONT_FAMILY,
+    font_paths: list[Path] | None = None,
+    temp_root: Path | None = None,
+    cover_only: bool = False,
+) -> None:
+    doc = fitz.open(source_pdf_path)
+    try:
+        typst_temp_root = resolve_typst_temp_root(output_pdf_path, temp_root)
+        overlay_translated_pages_on_doc(
+            doc,
+            translated_pages,
+            stem="book-overlay",
+            compile_workers=compile_workers,
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            font_family=font_family,
+            font_paths=font_paths,
+            temp_root=typst_temp_root,
+            cover_only=cover_only,
+        )
+        save_optimized_pdf(doc, output_pdf_path)
+    finally:
+        doc.close()
+
+
+def build_dual_book_pdf(
+    source_pdf_path: Path,
+    output_pdf_path: Path,
+    translated_pages: dict[int, list[dict]],
+    start_page: int = 0,
+    end_page: int = -1,
+    compile_workers: int | None = None,
+    api_key: str = "",
+    model: str = "",
+    base_url: str = "",
+    font_family: str = fonts.TYPST_DEFAULT_FONT_FAMILY,
+    font_paths: list[Path] | None = None,
+    temp_root: Path | None = None,
+    cover_only: bool = False,
+) -> None:
+    source_doc = fitz.open(source_pdf_path)
+    translated_doc = fitz.open(source_pdf_path)
+    dual_doc = fitz.open()
+    try:
+        typst_temp_root = resolve_typst_temp_root(output_pdf_path, temp_root)
+        overlay_translated_pages_on_doc(
+            translated_doc,
+            translated_pages,
+            stem="book-overlay-dual",
+            compile_workers=compile_workers,
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            font_family=font_family,
+            font_paths=font_paths,
+            temp_root=typst_temp_root,
+            cover_only=cover_only,
+        )
+        build_dual_doc_pages(
+            source_doc,
+            translated_doc,
+            dual_doc,
+            start_page=start_page,
+            end_page=end_page,
+        )
+        save_optimized_pdf(dual_doc, output_pdf_path)
+    finally:
+        dual_doc.close()
+        translated_doc.close()
+        source_doc.close()
+
+
+def build_book_typst_background_pdf(
+    source_pdf_path: Path,
+    output_pdf_path: Path,
+    translated_pages: dict[int, list[dict]],
+    api_key: str = "",
+    model: str = "",
+    base_url: str = "",
+    font_family: str = fonts.TYPST_DEFAULT_FONT_FAMILY,
+    font_paths: list[Path] | None = None,
+    temp_root: Path | None = None,
+) -> None:
+    page_specs = collect_background_page_specs(source_pdf_path, translated_pages)
+    work_dir = prepare_background_work_dir(output_pdf_path, temp_root)
+    background_pdf = compile_background_pdf_resilient(
+        source_pdf_path,
+        page_specs,
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
+        font_family=font_family,
+        font_paths=font_paths,
+        work_dir=work_dir,
+    )
+    save_background_pdf_to_output(background_pdf, output_pdf_path)
