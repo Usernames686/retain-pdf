@@ -76,10 +76,29 @@ def pdf_bool(value: object) -> bool:
     return str(value).lower() == "true"
 
 
+def _first_non_none(*values: object) -> object | None:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _pdf_string(value: object | None) -> str:
+    if value is None:
+        return ""
+    return str(value)
+
+
 def should_skip_recompress_image(obj: pikepdf.Object, info: dict) -> tuple[bool, str]:
     bits_per_component = int(info.get("bpc") or 0)
     obj_colorspace = obj.get(Name("/ColorSpace"))
-    colorspace = str(obj_colorspace or info.get("cs-name") or info.get("colorspace") or "")
+    colorspace_value = _first_non_none(
+        obj_colorspace,
+        info.get("cs-name"),
+        info.get("colorspace"),
+        "",
+    )
+    colorspace = _pdf_string(colorspace_value)
     filters = obj.get(Name("/Filter"))
     filter_names: set[str] = set()
     if isinstance(filters, list):
