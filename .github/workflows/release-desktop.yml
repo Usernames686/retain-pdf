@@ -172,6 +172,160 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag }}
           files: |
             desktop/win/RetainPDF-${{ steps.version.outputs.version }}-Setup.exe
+
+  build-linux-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Derive version
+        id: version
+        shell: bash
+        run: |
+          ref_name="${{ github.ref_name }}"
+          version=""
+          if [ -n "$ref_name" ] && [[ "$ref_name" == v* ]]; then
+            version="${ref_name#v}"
+          elif [ -f VERSION ]; then
+            version="$(tr -d '\r\n' < VERSION)"
+          else
+            version="$(node -p "require('./desktop/package.json').version")"
+          fi
+          if [ -z "$version" ]; then
+            echo "release version is empty" >&2
+            exit 1
+          fi
+          tag="v$version"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Write VERSION file
+        shell: bash
+        run: |
+          printf '%s\n' "${{ steps.version.outputs.version }}" > VERSION
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Setup Python runtime for desktop bundle
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Rust API for Linux
+        shell: bash
+        run: cargo build --release --manifest-path backend/rust_api/Cargo.toml
+
+      - name: Install Linux packaging dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+
+      - name: Assemble bundled Typst runtime
+        shell: bash
+        run: |
+          typst_version="${{ env.TYPST_VERSION }}"
+          typst_url="https://github.com/typst/typst/releases/download/v${typst_version}/typst-x86_64-unknown-linux-musl.tar.xz"
+          download_tar="$RUNNER_TEMP/typst-linux.tar.xz"
+          extract_root="$RUNNER_TEMP/typst-linux"
+          bundle_root="$PWD/backend/typst-linux"
+          echo "Downloading Typst $typst_version from $typst_url"
+          curl -L "$typst_url" -o "$download_tar"
+          rm -rf "$extract_root" "$bundle_root"
+          mkdir -p "$extract_root" "$bundle_root/bin"
+          tar -xJf "$download_tar" -C "$extract_root"
+          typst_bin="$(find "$extract_root" -type f -name typst | head -n 1)"
+          if [ -z "$typst_bin" ]; then
+            echo "typst binary not found in downloaded archive" >&2
+            exit 1
+          fi
+          install -m 755 "$typst_bin" "$bundle_root/bin/typst"
+          ls -lah "$bundle_root/bin/typst"
+
+      - name: Assemble bundled Typst packages
+        shell: bash
+        run: |
+          bundle_root="$PWD/backend/typst-packages/preview"
+          rm -rf "$PWD/backend/typst-packages"
+          mkdir -p "$bundle_root"
+          for spec in "cmarker:${{ env.CMARKER_VERSION }}" "mitex:${{ env.MITEX_VERSION }}"; do
+            name="${spec%%:*}"
+            version="${spec##*:}"
+            url="https://packages.typst.org/preview/${name}-${version}.tar.gz"
+            download="$RUNNER_TEMP/${name}-${version}.tar.gz"
+            extract_root="$RUNNER_TEMP/${name}-${version}"
+            target_dir="$bundle_root/$name/$version"
+            curl -L "$url" -o "$download"
+            rm -rf "$extract_root"
+            mkdir -p "$extract_root" "$target_dir"
+            tar -xzf "$download" -C "$extract_root"
+            cp -R "$extract_root"/. "$target_dir"/
+          done
+          find "$PWD/backend/typst-packages" -maxdepth 4 -type f | sort
+
+      - name: Assemble bundled Python runtime
+        shell: bash
+        run: |
+          python_bin="$(python3 -c 'import sys; print(sys.executable)')"
+          python_root="$(PYTHON_BIN="$python_bin" python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          python_bin = Path(os.environ["PYTHON_BIN"]).resolve()
+          print(python_bin.parent.parent)
+          PY
+          )"
+          bundle_root="$PWD/backend/python"
+          echo "Using Python executable: $python_bin"
+          echo "Python runtime root: $python_root"
+          rm -rf "$bundle_root"
+          mkdir -p "$bundle_root"
+          rsync -aL --delete \
+            --exclude '__pycache__' \
+            "$python_root"/ "$bundle_root"/
+          "$bundle_root/bin/python3" -m pip install --upgrade pip
+          py_minor="$("$bundle_root/bin/python3" - <<'PY'
+          import sys
+          print(f"{sys.version_info.major}.{sys.version_info.minor}")
+          PY
+          )"
+          site_packages="$bundle_root/lib/python${py_minor}/site-packages"
+          mkdir -p "$site_packages"
+          "$bundle_root/bin/python3" -m pip install --target "$site_packages" -r desktop/requirements-desktop-macos.txt
+          "$bundle_root/bin/python3" - <<'PY'
+          import requests, fitz, pikepdf
+          print("python_bundle_import_check=ok")
+          PY
+          du -sh "$bundle_root"
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        shell: bash
+        run: npm ci
+
+      - name: Build Linux package
+        working-directory: desktop
+        shell: bash
+        env:
+          RETAIN_PDF_VERSION: ${{ steps.version.outputs.version }}
+          RETAIN_PDF_DESKTOP_PLATFORM: linux
+        run: npm run dist:linux
+
+      - name: Upload Linux release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          files: |
             desktop/linux/RetainPDF-${{ steps.version.outputs.version }}-linux-amd64.deb
 
   build-macos-release:
