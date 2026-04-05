@@ -179,6 +179,8 @@ async function startBundledBackend() {
   const bundledTypstFontDir = path.join(backendRoot, "fonts");
   const dataRoot = path.join(app.getPath("userData"), "data");
   const rustApiRoot = path.join(dataRoot, "rust_api");
+  const typstPackagePath = path.join(backendRoot, "typst-packages");
+  const typstPackageCachePath = path.join(dataRoot, "typst-package-cache");
 
   if (!fs.existsSync(backendBin)) {
     throw new Error(`missing bundled backend binary: ${backendBin}`);
@@ -192,6 +194,7 @@ async function startBundledBackend() {
 
   fs.mkdirSync(dataRoot, { recursive: true });
   fs.mkdirSync(rustApiRoot, { recursive: true });
+  fs.mkdirSync(typstPackageCachePath, { recursive: true });
   updateSplashProgress(34, "正在准备工作目录", "正在初始化本地数据目录");
 
   const env = {
@@ -219,7 +222,11 @@ async function startBundledBackend() {
     RETAIN_PDF_FONT_PATH: bundledFontPath,
     RETAIN_PDF_TYPST_FONT_DIRS: bundledTypstFontDir,
     RETAIN_PDF_TYPST_FONT_FAMILY: "Source Han Serif SC",
+    TYPST_PACKAGE_CACHE_PATH: typstPackageCachePath,
   };
+  if (fs.existsSync(typstPackagePath)) {
+    env.TYPST_PACKAGE_PATH = typstPackagePath;
+  }
   if (pythonRuntime.bundledHome) {
     env.PYTHONHOME = pythonRuntime.bundledHome;
   }

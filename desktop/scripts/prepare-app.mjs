@@ -12,6 +12,7 @@ const backendRoot = path.join(repoRoot, "backend");
 const embeddedPythonRoot = path.join(backendRoot, "python");
 const typstWindowsRoot = path.join(backendRoot, "typst-win32");
 const typstDarwinRoot = path.join(backendRoot, "typst-darwin");
+const typstPackagesRoot = path.join(backendRoot, "typst-packages");
 const targetPlatform = process.env.RETAIN_PDF_DESKTOP_PLATFORM || process.platform;
 const appRoot = path.join(desktopRoot, "app");
 const outputFrontendRoot = path.join(appRoot, "frontend");
@@ -191,6 +192,13 @@ if (targetPlatform === "darwin" && fs.existsSync(typstDarwinRoot)) {
   });
 }
 
+if (fs.existsSync(typstPackagesRoot)) {
+  fs.cpSync(typstPackagesRoot, path.join(outputBackendRoot, "typst-packages"), {
+    recursive: true,
+    force: true,
+  });
+}
+
 if (fs.existsSync(bundledFontAssetsRoot)) {
   for (const entry of fs.readdirSync(bundledFontAssetsRoot)) {
     const from = path.join(bundledFontAssetsRoot, entry);
@@ -222,6 +230,7 @@ const manifest = {
     || fs.existsSync(path.join(outputBackendRoot, "python", "bin", "python3"))
     || fs.existsSync(path.join(outputBackendRoot, "python", "bin", "python")),
   typstBundled: fs.existsSync(path.join(outputBackendRoot, "typst")),
+  typstPackagesBundled: fs.existsSync(path.join(outputBackendRoot, "typst-packages")),
   bundledFonts: fs.readdirSync(bundledFontsRoot).sort(),
 };
 

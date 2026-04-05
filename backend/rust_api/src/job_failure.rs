@@ -177,6 +177,38 @@ pub fn classify_job_failure(job: &JobSnapshot) -> Option<JobFailureInfo> {
         });
     }
 
+    if haystack.contains("packages.typst.org")
+        || haystack.contains("failed to download package")
+        || haystack.contains("downloading @preview/")
+    {
+        return Some(JobFailureInfo {
+            stage: "render".to_string(),
+            category: "typst_dependency_download_failed".to_string(),
+            code: None,
+            summary: "Typst 渲染依赖下载失败".to_string(),
+            root_cause: Some(
+                "渲染阶段需要的 Typst 包未能成功获取，导致 PDF 编译中断".to_string(),
+            ),
+            retryable: true,
+            upstream_host: extract_upstream_host(&haystack),
+            provider: provider_name(diagnostics),
+            suggestion: Some(
+                "检查桌面包是否已内置 Typst packages，或确认运行环境可访问 packages.typst.org"
+                    .to_string(),
+            ),
+            last_log_line: select_relevant_log_line(
+                job,
+                error,
+                &[
+                    "failed to download package",
+                    "packages.typst.org",
+                    "downloading @preview/",
+                ],
+            ),
+            raw_error_excerpt: first_error_excerpt(error, &haystack),
+        });
+    }
+
     if contains_render_failure_signal(&haystack) {
         return Some(JobFailureInfo {
             stage: failed_stage,
@@ -458,5 +490,26 @@ mod tests {
         let failure = classify_job_failure(&job).expect("failure");
         assert_eq!(failure.category, "render_failed");
         assert_eq!(failure.stage, "render");
+    }
+
+    #[test]
+    fn classify_job_failure_maps_typst_package_download_failure() {
+        let mut job = crate::models::JobSnapshot::new(
+            "job-failure".to_string(),
+            CreateJobInput::default(),
+            vec!["python".to_string()],
+        );
+        job.status = crate::models::JobStatusKind::Failed;
+        job.error = Some(
+            "RuntimeError: downloading @preview/cmarker:0.1.8\nerror: failed to download package (https://packages.typst.org/preview/cmarker-0.1.8.tar.gz: Connection Failed)"
+                .to_string(),
+        );
+        job.stage = Some("rendering".to_string());
+        job.stage_detail = Some("正在准备渲染".to_string());
+
+        let failure = classify_job_failure(&job).expect("failure");
+        assert_eq!(failure.category, "typst_dependency_download_failed");
+        assert_eq!(failure.stage, "render");
+        assert_eq!(failure.upstream_host.as_deref(), Some("packages.typst.org"));
     }
 }

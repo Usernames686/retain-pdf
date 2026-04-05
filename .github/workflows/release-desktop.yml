@@ -11,6 +11,8 @@ permissions:
 
 env:
   TYPST_VERSION: "0.14.2"
+  CMARKER_VERSION: "0.1.8"
+  MITEX_VERSION: "0.2.6"
 
 jobs:
   build-windows-release:
@@ -92,6 +94,33 @@ jobs:
           }
           Copy-Item $typstExe.FullName (Join-Path $bundleRoot "bin/typst.exe") -Force
           Get-Item (Join-Path $bundleRoot "bin/typst.exe") | Select-Object FullName, Length, LastWriteTime
+
+      - name: Assemble bundled Typst packages
+        shell: pwsh
+        run: |
+          $bundleRoot = Join-Path $PWD "backend/typst-packages/preview"
+          $packages = @(
+            @{ Name = "cmarker"; Version = "${{ env.CMARKER_VERSION }}" },
+            @{ Name = "mitex"; Version = "${{ env.MITEX_VERSION }}" }
+          )
+          if (Test-Path (Join-Path $PWD "backend/typst-packages")) {
+            Remove-Item (Join-Path $PWD "backend/typst-packages") -Recurse -Force
+          }
+          foreach ($pkg in $packages) {
+            $url = "https://packages.typst.org/preview/$($pkg.Name)-$($pkg.Version).tar.gz"
+            $download = Join-Path $env:RUNNER_TEMP "$($pkg.Name)-$($pkg.Version).tar.gz"
+            $extractRoot = Join-Path $env:RUNNER_TEMP "$($pkg.Name)-$($pkg.Version)"
+            $targetDir = Join-Path $bundleRoot "$($pkg.Name)/$($pkg.Version)"
+            Invoke-WebRequest -Uri $url -OutFile $download
+            if (Test-Path $extractRoot) {
+              Remove-Item $extractRoot -Recurse -Force
+            }
+            New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null
+            tar -xzf $download -C $extractRoot
+            New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+            Copy-Item (Join-Path $extractRoot "*") $targetDir -Recurse -Force
+          }
+          Get-ChildItem (Join-Path $PWD "backend/typst-packages") -Recurse | Select-Object FullName, Length
 
       - name: Assemble bundled Python runtime
         shell: pwsh
@@ -216,6 +245,27 @@ jobs:
           fi
           install -m 755 "$typst_bin" "$bundle_root/bin/typst"
           ls -lah "$bundle_root/bin/typst"
+
+      - name: Assemble bundled Typst packages
+        shell: bash
+        run: |
+          bundle_root="$PWD/backend/typst-packages/preview"
+          rm -rf "$PWD/backend/typst-packages"
+          mkdir -p "$bundle_root"
+          for spec in "cmarker:${{ env.CMARKER_VERSION }}" "mitex:${{ env.MITEX_VERSION }}"; do
+            name="${spec%%:*}"
+            version="${spec##*:}"
+            url="https://packages.typst.org/preview/${name}-${version}.tar.gz"
+            download="$RUNNER_TEMP/${name}-${version}.tar.gz"
+            extract_root="$RUNNER_TEMP/${name}-${version}"
+            target_dir="$bundle_root/$name/$version"
+            curl -L "$url" -o "$download"
+            rm -rf "$extract_root"
+            mkdir -p "$extract_root" "$target_dir"
+            tar -xzf "$download" -C "$extract_root"
+            cp -R "$extract_root"/. "$target_dir"/
+          done
+          find "$PWD/backend/typst-packages" -maxdepth 4 -type f | sort
 
       - name: Install qpdf build dependency
         shell: bash
