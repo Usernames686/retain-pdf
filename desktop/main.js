@@ -185,7 +185,6 @@ async function startBundledBackend() {
     PYTHONUTF8: "1",
     PYTHONDONTWRITEBYTECODE: "1",
     PDF_TRANSLATOR_TRUST_ENV_PROXY: "1",
-    PDF_TRANSLATOR_DEEPSEEK_STREAM: "1",
     RETAIN_PDF_FONT_PATH: bundledFontPath,
     RETAIN_PDF_TYPST_FONT_DIRS: bundledTypstFontDir,
     RETAIN_PDF_TYPST_FONT_FAMILY: "Source Han Serif SC",

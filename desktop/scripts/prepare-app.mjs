@@ -16,6 +16,7 @@ const appRoot = path.join(desktopRoot, "app");
 const outputFrontendRoot = path.join(appRoot, "frontend");
 const outputBackendRoot = path.join(appRoot, "backend");
 const bundledFontsRoot = path.join(outputBackendRoot, "fonts");
+const bundledFontAssetsRoot = path.join(desktopRoot, "assets", "fonts");
 const desktopPackagePath = path.join(desktopRoot, "package.json");
 const desktopPackage = JSON.parse(fs.readFileSync(desktopPackagePath, "utf8"));
 
@@ -182,20 +183,24 @@ if (targetPlatform === "win32" && fs.existsSync(typstWindowsRoot)) {
   });
 }
 
-const fontCandidates = [
-  {
-    from: "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
-    to: path.join(bundledFontsRoot, "DroidSansFallbackFull.ttf"),
-  },
-  {
-    from: "/home/wxyhgk/.local/share/fonts/source-han-serif-sc/SourceHanSerifSC-Regular.otf",
-    to: path.join(bundledFontsRoot, "SourceHanSerifSC-Regular.otf"),
-  },
-];
+if (fs.existsSync(bundledFontAssetsRoot)) {
+  for (const entry of fs.readdirSync(bundledFontAssetsRoot)) {
+    const from = path.join(bundledFontAssetsRoot, entry);
+    const to = path.join(bundledFontsRoot, entry);
+    if (fs.statSync(from).isFile()) {
+      fs.cpSync(from, to, { force: true });
+    }
+  }
+}
 
-for (const item of fontCandidates) {
-  if (fs.existsSync(item.from)) {
-    fs.cpSync(item.from, item.to, { force: true });
+const requiredBundledFonts = [
+  "DroidSansFallbackFull.ttf",
+  "SourceHanSerifSC-Regular.otf",
+];
+for (const fileName of requiredBundledFonts) {
+  const expectedPath = path.join(bundledFontsRoot, fileName);
+  if (!fs.existsSync(expectedPath)) {
+    throw new Error(`Missing bundled font asset: ${expectedPath}`);
   }
 }
 
