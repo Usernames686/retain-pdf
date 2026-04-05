@@ -228,7 +228,18 @@ jobs:
           export LDFLAGS="-L$qpdf_prefix/lib ${LDFLAGS:-}"
           export PKG_CONFIG_PATH="$qpdf_prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
           "$bundle_root/bin/python3" -m pip install --upgrade pip
-          "$bundle_root/bin/python3" -m pip install -r desktop/requirements-desktop-macos.txt
+          py_minor="$("$bundle_root/bin/python3" - <<'PY'
+          import sys
+          print(f"{sys.version_info.major}.{sys.version_info.minor}")
+          PY
+          )"
+          site_packages="$bundle_root/lib/python${py_minor}/site-packages"
+          mkdir -p "$site_packages"
+          "$bundle_root/bin/python3" -m pip install --target "$site_packages" -r desktop/requirements-desktop-macos.txt
+          "$bundle_root/bin/python3" - <<'PY'
+          import requests, fitz, pikepdf
+          print("python_bundle_import_check=ok")
+          PY
           du -sh "$bundle_root"
 
       - name: Install desktop dependencies

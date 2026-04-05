@@ -125,6 +125,33 @@ function resolvePythonRuntime(backendRoot) {
   return { command: "python3", bundledHome: null };
 }
 
+function bundledPythonSitePackages(bundledHome) {
+  if (!bundledHome || !fs.existsSync(bundledHome)) {
+    return [];
+  }
+  if (process.platform === "win32") {
+    const windowsSitePackages = path.join(bundledHome, "Lib", "site-packages");
+    return fs.existsSync(windowsSitePackages) ? [windowsSitePackages] : [];
+  }
+
+  const libRoot = path.join(bundledHome, "lib");
+  if (!fs.existsSync(libRoot)) {
+    return [];
+  }
+
+  const matches = [];
+  for (const entry of fs.readdirSync(libRoot)) {
+    if (!/^python\d+\.\d+$/.test(entry)) {
+      continue;
+    }
+    const sitePackages = path.join(libRoot, entry, "site-packages");
+    if (fs.existsSync(sitePackages)) {
+      matches.push(sitePackages);
+    }
+  }
+  return matches;
+}
+
 function resolveTypstBinary(backendRoot) {
   const candidates = process.platform === "win32"
     ? [path.join(backendRoot, "typst", "bin", "typst.exe")]
@@ -180,7 +207,11 @@ async function startBundledBackend() {
     RUST_API_PROJECT_ROOT: backendRoot,
     RUST_API_SCRIPTS_DIR: scriptsDir,
     PYTHON_BIN: pythonRuntime.command,
-    PYTHONPATH: scriptsDir,
+    PYTHONPATH: [
+      scriptsDir,
+      ...bundledPythonSitePackages(pythonRuntime.bundledHome),
+      process.env.PYTHONPATH || "",
+    ].filter(Boolean).join(path.delimiter),
     PYTHONUNBUFFERED: "1",
     PYTHONUTF8: "1",
     PYTHONDONTWRITEBYTECODE: "1",
