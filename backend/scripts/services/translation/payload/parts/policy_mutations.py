@@ -1,3 +1,4 @@
+from __future__ import annotations
 from services.document_schema.semantics import is_algorithm_semantic
 from services.document_schema.semantics import is_reference_entry_semantic
 from services.document_schema.semantics import is_reference_heading_semantic

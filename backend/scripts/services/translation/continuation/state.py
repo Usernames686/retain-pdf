@@ -1,3 +1,4 @@
+from __future__ import annotations
 from services.translation.continuation.rules import eligible
 from services.translation.continuation.rules import normalize_text
 from services.translation.continuation.rules import pair_decision

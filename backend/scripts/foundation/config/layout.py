@@ -1,3 +1,4 @@
+from __future__ import annotations
 BODY_FONT_SIZE_FACTOR = 0.9215
 BODY_LEADING_FACTOR = 0.988
 INNER_BBOX_SHRINK_X = 0.035

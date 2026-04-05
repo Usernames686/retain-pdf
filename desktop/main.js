@@ -96,9 +96,17 @@ function resolveBackendBinary(backendRoot) {
 }
 
 function resolvePythonRuntime(backendRoot) {
-  const bundledWindows = path.join(backendRoot, "python", "python.exe");
-  if (fs.existsSync(bundledWindows)) {
-    return { command: bundledWindows, bundledHome: path.join(backendRoot, "python") };
+  const bundledRoot = path.join(backendRoot, "python");
+  const bundledCandidates = process.platform === "win32"
+    ? [path.join(bundledRoot, "python.exe")]
+    : [
+        path.join(bundledRoot, "bin", "python3"),
+        path.join(bundledRoot, "bin", "python"),
+      ];
+  for (const candidate of bundledCandidates) {
+    if (fs.existsSync(candidate)) {
+      return { command: candidate, bundledHome: bundledRoot };
+    }
   }
   if (process.platform === "darwin") {
     const macCandidates = [

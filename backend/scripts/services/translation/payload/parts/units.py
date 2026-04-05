@@ -1,3 +1,4 @@
+from __future__ import annotations
 from .common import (
     GROUP_ITEM_PREFIX,
     has_group_translation,

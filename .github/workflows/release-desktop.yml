@@ -184,12 +184,41 @@ jobs:
           cache: "npm"
           cache-dependency-path: desktop/package-lock.json
 
+      - name: Setup Python runtime for desktop bundle
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build Rust API for macOS
         shell: bash
         run: cargo build --release --manifest-path backend/rust_api/Cargo.toml
+
+      - name: Assemble bundled Python runtime
+        shell: bash
+        run: |
+          python_bin="$(python3 -c 'import sys; print(sys.executable)')"
+          python_root="$(PYTHON_BIN="$python_bin" python3 - <<'PY'
+import os
+from pathlib import Path
+
+python_bin = Path(os.environ["PYTHON_BIN"]).resolve()
+print(python_bin.parent.parent)
+PY
+)"
+          bundle_root="$PWD/backend/python"
+          echo "Using Python executable: $python_bin"
+          echo "Python runtime root: $python_root"
+          rm -rf "$bundle_root"
+          mkdir -p "$bundle_root"
+          rsync -aL --delete \
+            --exclude '__pycache__' \
+            "$python_root"/ "$bundle_root"/
+          "$bundle_root/bin/python3" -m pip install --upgrade pip
+          "$bundle_root/bin/python3" -m pip install -r desktop/requirements-desktop-macos.txt
+          du -sh "$bundle_root"
 
       - name: Install desktop dependencies
         working-directory: desktop

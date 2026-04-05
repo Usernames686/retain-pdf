@@ -1,3 +1,4 @@
+from __future__ import annotations
 from foundation.config.fonts import DEFAULT_FONT_PATH
 from foundation.config.fonts import DEFAULT_FONT_SIZE
 from foundation.config.fonts import MIN_FONT_SIZE

@@ -79,6 +79,11 @@ function resolveRustApiBinary() {
   };
 }
 
+function hasBundledPosixPython(root) {
+  return fs.existsSync(path.join(root, "bin", "python3"))
+    || fs.existsSync(path.join(root, "bin", "python"));
+}
+
 const rustApiBinary = resolveRustApiBinary();
 if (desktopPackage.version !== releaseVersion) {
   desktopPackage.version = releaseVersion;
@@ -163,6 +168,13 @@ if (targetPlatform === "win32" && fs.existsSync(path.join(embeddedPythonRoot, "p
   });
 }
 
+if ((targetPlatform === "darwin" || targetPlatform === "linux") && hasBundledPosixPython(embeddedPythonRoot)) {
+  fs.cpSync(embeddedPythonRoot, path.join(outputBackendRoot, "python"), {
+    recursive: true,
+    force: true,
+  });
+}
+
 if (targetPlatform === "win32" && fs.existsSync(typstWindowsRoot)) {
   fs.cpSync(typstWindowsRoot, path.join(outputBackendRoot, "typst"), {
     recursive: true,
@@ -193,7 +205,9 @@ const manifest = {
   targetPlatform,
   rustApiBinaryBundled: fs.existsSync(path.join(outputBackendRoot, "bin", rustApiBinary.fileName)),
   rustApiBinaryName: rustApiBinary.fileName,
-  pythonBundled: fs.existsSync(path.join(outputBackendRoot, "python", "python.exe")),
+  pythonBundled: fs.existsSync(path.join(outputBackendRoot, "python", "python.exe"))
+    || fs.existsSync(path.join(outputBackendRoot, "python", "bin", "python3"))
+    || fs.existsSync(path.join(outputBackendRoot, "python", "bin", "python")),
   typstBundled: fs.existsSync(path.join(outputBackendRoot, "typst")),
   bundledFonts: fs.readdirSync(bundledFontsRoot).sort(),
 };
