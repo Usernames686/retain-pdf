@@ -5,6 +5,7 @@
 建议优先阅读：
 
 - [API 总入口](./API.md)
+- [工程评价与后续执行计划](./工程评价与后续执行计划.md)
 - [后端 API 主文档](./backend-api.md)
 - [服务总览](./api-overview.md)
 - [本地启动与配置](./api-dev.md)
