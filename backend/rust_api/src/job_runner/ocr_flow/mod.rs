@@ -84,6 +84,19 @@ async fn mirror_parent_ocr_status(
     Ok(())
 }
 
+fn fail_missing_source_pdf(job: &mut JobRuntimeState, source_pdf_path: &std::path::Path) {
+    let message = format!("source pdf not found: {}", source_pdf_path.display());
+    job.status = JobStatusKind::Failed;
+    job.stage = Some("failed".to_string());
+    job.stage_detail = Some("OCR 已完成，但任务源 PDF 缺失".to_string());
+    job.error = Some(message.clone());
+    job.updated_at = now_iso();
+    job.finished_at = Some(now_iso());
+    job.append_log(&message);
+    refresh_job_failure(job);
+    sync_runtime_state(job);
+}
+
 pub async fn execute_ocr_job(
     state: AppState,
     mut job: JobRuntimeState,
@@ -131,6 +144,12 @@ pub async fn execute_ocr_job(
         clear_canceled_runtime_artifacts(&mut job);
         clear_job_failure(&mut job);
         sync_runtime_state(&mut job);
+        save_ocr_job(&state, &job, parent_job_id.as_deref()).await?;
+        return Ok(job);
+    }
+
+    if !source_pdf_path.exists() {
+        fail_missing_source_pdf(&mut job, &source_pdf_path);
         save_ocr_job(&state, &job, parent_job_id.as_deref()).await?;
         return Ok(job);
     }
@@ -216,5 +235,32 @@ pub fn sync_parent_with_ocr_child(
         parent_artifacts.provider_trace_id = child_artifacts.provider_trace_id.clone();
         parent_artifacts.ocr_provider_diagnostics =
             child_artifacts.ocr_provider_diagnostics.clone();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::CreateJobInput;
+
+    #[test]
+    fn fail_missing_source_pdf_marks_job_failed_with_clear_detail() {
+        let mut job = crate::models::JobSnapshot::new(
+            "job-missing-source-pdf".to_string(),
+            CreateJobInput::default(),
+            vec!["python".to_string()],
+        )
+        .into_runtime();
+        let missing = std::path::Path::new("/definitely/missing/source.pdf");
+
+        fail_missing_source_pdf(&mut job, missing);
+
+        assert_eq!(job.status, JobStatusKind::Failed);
+        assert_eq!(job.stage.as_deref(), Some("failed"));
+        assert_eq!(job.stage_detail.as_deref(), Some("OCR 已完成，但任务源 PDF 缺失"));
+        let failure = job.failure.as_ref().expect("failure");
+        assert_eq!(failure.category, "source_pdf_missing");
+        assert_eq!(failure.summary, "源 PDF 缺失");
+        assert!(!failure.retryable);
     }
 }

@@ -201,6 +201,7 @@ pub struct NormalizationSummaryView {
 #[derive(Debug, Serialize)]
 pub struct JobListItemView {
     pub job_id: String,
+    pub display_name: String,
     pub workflow: WorkflowKind,
     pub status: JobStatusKind,
     pub trace_id: Option<String>,
@@ -569,10 +570,11 @@ pub fn job_to_detail(
     }
 }
 
-pub fn job_to_list_item(job: &JobSnapshot, base_url: &str) -> JobListItemView {
+pub fn job_to_list_item(job: &JobSnapshot, base_url: &str, display_name: String) -> JobListItemView {
     let detail_path = format!("{}/{}", job_path_prefix(&job.workflow), job.job_id);
     JobListItemView {
         job_id: job.job_id.clone(),
+        display_name,
         workflow: job.workflow.clone(),
         status: job.status.clone(),
         trace_id: job

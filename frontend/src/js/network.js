@@ -42,6 +42,26 @@ export async function fetchJobArtifactsManifest(jobId, apiPrefix) {
   return unwrapEnvelope(payloadJson);
 }
 
+export async function fetchJobList(apiPrefix, { limit = 20, offset = 0, status = "", workflow = "" } = {}) {
+  const params = new URLSearchParams();
+  params.set("limit", `${limit}`);
+  params.set("offset", `${offset}`);
+  if (status) {
+    params.set("status", status);
+  }
+  if (workflow) {
+    params.set("workflow", workflow);
+  }
+  const resp = await fetch(`${apiBase()}${apiPrefix}/jobs?${params.toString()}`, {
+    headers: buildApiHeaders(),
+  });
+  if (!resp.ok) {
+    throw new Error(`读取最近任务失败，请稍后重试。(${resp.status})`);
+  }
+  const payloadJson = await resp.json();
+  return unwrapEnvelope(payloadJson);
+}
+
 export function submitUploadRequest(url, form, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -101,6 +121,10 @@ export async function submitJson(url, payload) {
   }
   const payloadJson = await resp.json();
   return unwrapEnvelope(payloadJson);
+}
+
+export async function validateMineruToken(apiPrefix, payload) {
+  return submitJson(`${apiBase()}${apiPrefix}/providers/mineru/validate-token`, payload);
 }
 
 export async function fetchProtected(url, options = {}) {

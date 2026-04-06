@@ -42,6 +42,7 @@ pub const ARTIFACT_KEY_PROVIDER_RESULT_JSON: &str = "provider_result_json";
 pub const ARTIFACT_KEY_PROVIDER_RAW_DIR: &str = "provider_raw_dir";
 pub const ARTIFACT_KEY_PIPELINE_SUMMARY: &str = "pipeline_summary";
 pub const ARTIFACT_KEY_TRANSLATIONS_DIR: &str = "translations_dir";
+pub const ARTIFACT_KEY_EVENTS_JSONL: &str = "events_jsonl";
 
 #[derive(Clone, Debug)]
 pub struct JobPaths {
@@ -334,6 +335,12 @@ pub fn resolve_registered_artifact_path(
     resolve_data_path(data_root, &artifact.relative_path)
 }
 
+pub fn resolve_events_jsonl(job: &JobSnapshot, data_root: &Path) -> Option<PathBuf> {
+    let job_root = job.artifacts.as_ref()?.job_root.as_ref()?;
+    let root = resolve_data_path(data_root, job_root).ok()?;
+    Some(root.join(OUTPUT_LOGS_DIR_NAME).join("events.jsonl"))
+}
+
 pub fn collect_job_artifact_entries(
     job: &JobSnapshot,
     data_root: &Path,
@@ -540,6 +547,20 @@ pub fn collect_job_artifact_entries(
         &mut items,
         data_root,
         &job.job_id,
+        resolve_events_jsonl(job, data_root)
+            .as_ref()
+            .map(|path| path.as_path()),
+        ARTIFACT_KEY_EVENTS_JSONL,
+        ARTIFACT_GROUP_DEBUG,
+        ARTIFACT_KIND_FILE,
+        "application/x-ndjson",
+        Some("runtime".to_string()),
+        &now,
+    )?;
+    push_optional_artifact(
+        &mut items,
+        data_root,
+        &job.job_id,
         artifacts.translations_dir.as_deref(),
         ARTIFACT_KEY_TRANSLATIONS_DIR,
         ARTIFACT_GROUP_DEBUG,
@@ -723,6 +744,7 @@ mod tests {
         fs::create_dir_all(job_root.join("md/images")).expect("markdown images dir");
         fs::create_dir_all(job_root.join("ocr/normalized")).expect("normalized dir");
         fs::create_dir_all(job_root.join("artifacts")).expect("artifacts dir");
+        fs::create_dir_all(job_root.join("logs")).expect("logs dir");
         fs::write(job_root.join("source/in.pdf"), b"pdf").expect("source pdf");
         fs::write(job_root.join("rendered/out.pdf"), b"pdf").expect("output pdf");
         fs::write(
@@ -732,6 +754,8 @@ mod tests {
         .expect("typst source");
         fs::write(job_root.join("md/full.md"), b"# doc").expect("markdown");
         fs::write(job_root.join("ocr/normalized/document.v1.json"), b"{}").expect("json");
+        fs::write(job_root.join("logs/events.jsonl"), b"{\"event\":\"job_created\"}\n")
+            .expect("events jsonl");
 
         let mut job = JobSnapshot::new(
             "job-1".to_string(),
@@ -772,6 +796,9 @@ mod tests {
         assert!(items
             .iter()
             .any(|item| item.artifact_key == ARTIFACT_KEY_NORMALIZED_DOCUMENT_JSON));
+        assert!(items
+            .iter()
+            .any(|item| item.artifact_key == ARTIFACT_KEY_EVENTS_JSONL));
 
         let _ = fs::remove_dir_all(root);
     }

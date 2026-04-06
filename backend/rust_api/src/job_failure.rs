@@ -149,6 +149,23 @@ pub fn classify_job_failure(job: &JobSnapshot) -> Option<JobFailureInfo> {
         ));
     }
 
+    if haystack.contains("source pdf not found") {
+        return Some(build_failure(
+            "normalization".to_string(),
+            "source_pdf_missing",
+            None,
+            "源 PDF 缺失",
+            Some("OCR 已完成，但进入标准化阶段时找不到任务工作目录中的源 PDF".to_string()),
+            false,
+            None,
+            provider_name(diagnostics),
+            Some("检查桌面端任务目录下的 source/ 是否存在源 PDF，并确认打包环境没有丢失文件复制步骤".to_string()),
+            select_relevant_log_line(job, error, &["source pdf not found"]),
+            first_error_excerpt(error, &haystack),
+            raw_diagnostic.clone(),
+        ));
+    }
+
     if haystack.contains("401")
         || haystack.contains("403")
         || haystack.contains("missing or invalid X-API-Key")
@@ -711,5 +728,25 @@ mod tests {
                 .and_then(|item| item.structured_error_type.as_deref()),
             Some("document_schema_validation_failed")
         );
+    }
+
+    #[test]
+    fn classify_job_failure_maps_missing_source_pdf() {
+        let mut job = crate::models::JobSnapshot::new(
+            "job-missing-source-pdf".to_string(),
+            CreateJobInput::default(),
+            vec!["python".to_string()],
+        );
+        job.status = crate::models::JobStatusKind::Failed;
+        job.stage = Some("failed".to_string());
+        job.error = Some(
+            "RuntimeError: source pdf not found: /tmp/jobs/job/source/input.pdf".to_string(),
+        );
+
+        let failure = classify_job_failure(&job).expect("failure");
+        assert_eq!(failure.category, "source_pdf_missing");
+        assert_eq!(failure.stage, "normalization");
+        assert_eq!(failure.summary, "源 PDF 缺失");
+        assert!(!failure.retryable);
     }
 }

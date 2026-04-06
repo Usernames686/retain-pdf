@@ -287,8 +287,8 @@ export function summarizeDiagnostic(payload) {
     return "-";
   }
   const lines = [
-    `阶段: ${diag.failed_stage || "-"}`,
-    `类型: ${diag.error_kind || "-"}`,
+    `阶段: ${diag.stage || diag.failed_stage || "-"}`,
+    `类型: ${diag.type || diag.error_kind || "-"}`,
     `摘要: ${diag.summary || "-"}`,
     `可重试: ${diag.retryable ? "是" : "否"}`,
   ];

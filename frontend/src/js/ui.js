@@ -251,22 +251,26 @@ function renderRuntimeDetails(job) {
 
 function renderFailureDetails(job) {
   const failure = job.failure || {};
+  const failureDiagnostic = job.failure_diagnostic || {};
   safeSetText("failure-summary", summarizeRuntimeField(
-    failure.summary || job.final_failure_summary || job.failure_diagnostic?.summary,
+    failure.summary || job.final_failure_summary || failureDiagnostic.summary,
   ));
   safeSetText("failure-category", summarizeRuntimeField(
-    failure.category || job.final_failure_category || job.failure_diagnostic?.error_kind,
+    failure.category || job.final_failure_category || failureDiagnostic.type || failureDiagnostic.error_kind,
   ));
   safeSetText("failure-stage", summarizeRuntimeField(
-    failure.stage || job.failure_diagnostic?.failed_stage,
+    failure.stage || failureDiagnostic.stage || failureDiagnostic.failed_stage,
   ));
   safeSetText("failure-root-cause", summarizeRuntimeField(
-    failure.root_cause || job.failure_diagnostic?.root_cause,
+    failure.root_cause || failureDiagnostic.root_cause,
   ));
   safeSetText("failure-suggestion", summarizeRuntimeField(
-    failure.suggestion || job.failure_diagnostic?.suggestion,
+    failure.suggestion || failureDiagnostic.suggestion,
   ));
-  const retryable = failure.retryable ?? job.failure_diagnostic?.retryable;
+  safeSetText("failure-last-log-line", summarizeRuntimeField(
+    failure.last_log_line || failureDiagnostic.last_log_line,
+  ));
+  const retryable = failure.retryable ?? failureDiagnostic.retryable;
   safeSetText("failure-retryable", typeof retryable === "boolean" ? (retryable ? "是" : "否") : "-");
 }
 

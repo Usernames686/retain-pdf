@@ -30,6 +30,7 @@ use crate::config::AppConfig;
 use crate::db::Db;
 use crate::routes::health;
 use crate::routes::jobs;
+use crate::routes::providers;
 use crate::routes::uploads;
 
 #[derive(Clone)]
@@ -148,6 +149,10 @@ pub fn build_app(state: AppState) -> Router {
         )
         .route("/api/v1/jobs/:job_id/download", get(jobs::download_bundle))
         .route("/api/v1/jobs/:job_id/cancel", post(jobs::cancel_job))
+        .route(
+            "/api/v1/providers/mineru/validate-token",
+            post(providers::validate_mineru_token),
+        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_api_key,

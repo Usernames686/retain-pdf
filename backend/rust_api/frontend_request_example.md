@@ -4,7 +4,7 @@
 
 配合主文档使用：
 
-- [api.md](/home/wxyhgk/tmp/Code/backend/rust_api/api.md)
+- [API 文档总入口](/home/wxyhgk/tmp/Code/doc/API.md)
 
 文档约定：
 

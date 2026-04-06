@@ -24,7 +24,7 @@ pub async fn list_jobs(
     let base_url = request_base_url(&headers, &state);
     let items = jobs
         .iter()
-        .map(|job| job_to_list_item(job, &base_url))
+        .map(|job| job_to_list_item(job, &base_url, derive_display_name(&state, job)))
         .collect();
     Ok(Json(ApiResponse::ok(JobListView { items })))
 }
@@ -118,4 +118,58 @@ pub async fn get_job_artifacts_manifest(
     Ok(Json(ApiResponse::ok(build_artifact_manifest_view(
         &state, &job, &base_url,
     )?)))
+}
+
+fn derive_display_name(state: &AppState, job: &crate::models::JobSnapshot) -> String {
+    if let Some(upload_id) = job
+        .upload_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if let Ok(upload) = state.db.get_upload(upload_id) {
+            let file_name = upload.filename.trim();
+            if !file_name.is_empty() {
+                return file_name.to_string();
+            }
+        }
+    }
+
+    if let Some(name) = source_url_file_name(&job.request_payload.source.source_url) {
+        return name;
+    }
+
+    job.job_id.clone()
+}
+
+fn source_url_file_name(source_url: &str) -> Option<String> {
+    let trimmed = source_url.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let no_fragment = trimmed.split('#').next().unwrap_or(trimmed);
+    let no_query = no_fragment.split('?').next().unwrap_or(no_fragment);
+    let candidate = no_query.rsplit('/').next().unwrap_or(no_query).trim();
+    if candidate.is_empty() {
+        return None;
+    }
+    Some(candidate.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::source_url_file_name;
+
+    #[test]
+    fn source_url_file_name_extracts_tail() {
+        assert_eq!(
+            source_url_file_name("https://example.com/files/paper.pdf?download=1#top"),
+            Some("paper.pdf".to_string())
+        );
+    }
+
+    #[test]
+    fn source_url_file_name_rejects_empty_tail() {
+        assert_eq!(source_url_file_name("https://example.com/files/"), None);
+    }
 }

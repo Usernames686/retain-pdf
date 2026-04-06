@@ -89,6 +89,10 @@
     background: transparent;
   }
 
+  #browser-credentials-dialog {
+    width: min(620px, calc(100vw - 24px));
+  }
+
   .desktop-dialog::backdrop {
     background: rgba(15, 23, 42, 0.3);
   }
@@ -102,6 +106,10 @@
   .desktop-head {
     @apply flex items-center justify-between gap-3 border-b px-6 py-5;
     border-color: var(--line);
+  }
+
+  #browser-credentials-dialog .desktop-head {
+    padding: 18px 20px;
   }
 
   .dialog-close-btn {
@@ -121,6 +129,213 @@
 
   .desktop-body {
     @apply grid gap-4 p-6;
+  }
+
+  #browser-credentials-dialog .desktop-body {
+    gap: 12px;
+    padding: 18px 20px 20px;
+  }
+
+  .credential-dialog-head h2 {
+    font-size: 1.08rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    color: #1d1d1f;
+  }
+
+  .credential-dialog-head p {
+    margin-top: 4px;
+    font-size: 13px;
+    line-height: 1.55;
+    color: #6e6e73;
+  }
+
+  .credential-dialog-body {
+    gap: 14px;
+  }
+
+  .credential-card-grid {
+    display: grid;
+    gap: 10px;
+  }
+
+  .credential-card {
+    display: grid;
+    gap: 10px;
+    padding: 13px 14px;
+    border: 1px solid #ececf1;
+    border-radius: 18px;
+    background: #fbfbfd;
+  }
+
+  .credential-card-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .credential-card-head h3 {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    color: #1d1d1f;
+  }
+
+  .credential-card-head p {
+    margin-top: 3px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #6e6e73;
+  }
+
+  .credential-card-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 30px;
+    padding: 0 12px;
+    border-radius: 999px;
+    border: 1px solid #d2d2d7;
+    background: #fff;
+    color: #1d1d1f;
+    font-size: 12px;
+    font-weight: 500;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+
+  .credential-card-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 10px;
+  }
+
+  .credential-card-actions button.secondary {
+    min-height: 34px;
+    padding-inline: 12px;
+    font-size: 12px;
+  }
+
+  .token-inline-status {
+    display: inline-flex;
+    align-items: center;
+    min-height: 34px;
+    font-size: 12px;
+    line-height: 1.45;
+    color: #6e6e73;
+  }
+
+  .token-inline-status.is-valid {
+    color: #1f6f3f;
+  }
+
+  .token-inline-status.is-error {
+    color: #a11b16;
+  }
+
+  .credential-dialog-actions {
+    justify-content: flex-end;
+    margin-top: 2px;
+  }
+
+  .recent-jobs-head h2 {
+    font-size: 1.05rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    color: #1d1d1f;
+  }
+
+  .recent-jobs-head p {
+    margin-top: 4px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #6e6e73;
+  }
+
+  .recent-jobs-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+  }
+
+  .recent-jobs-toolbar input[type="date"] {
+    width: auto;
+    min-width: 148px;
+    height: 36px;
+    min-height: 36px;
+    padding: 0 12px;
+    border-radius: 999px;
+    background: #fff;
+    font-size: 12px;
+  }
+
+  .recent-jobs-list {
+    display: grid;
+    gap: 10px;
+    width: 100%;
+  }
+
+  .recent-jobs-more-row {
+    display: flex;
+    justify-content: center;
+  }
+
+  .recent-job-item {
+    display: grid;
+    gap: 8px;
+    width: 100%;
+    padding: 12px 14px;
+    border: 1px solid #ececf1;
+    border-radius: 16px;
+    background: #fbfbfd;
+    text-align: left;
+    box-shadow: none;
+    justify-content: stretch;
+    justify-items: stretch;
+    align-content: start;
+    align-items: stretch;
+  }
+
+  .recent-job-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .recent-job-id {
+    font-size: 13px;
+    font-weight: 600;
+    color: #1d1d1f;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .recent-job-status {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 24px;
+    padding: 0 10px;
+    border-radius: 999px;
+    background: #1d1d1f;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .recent-job-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    font-size: 12px;
+    color: #6e6e73;
   }
 
   .status-detail-dialog {
@@ -560,23 +775,12 @@
     z-index: 2;
   }
 
-  .credential-gate-button {
+  .credential-gate-panel {
     display: grid;
     gap: 8px;
-    width: min(100%, 320px);
-    min-height: auto;
-    padding: 8px 12px;
-    border: none;
-    border-radius: 0;
-    background: transparent;
-    color: #1d1d1f;
-    box-shadow: none;
+    width: min(100%, 336px);
+    padding: 12px 14px;
     text-align: center;
-  }
-
-  .credential-gate-button:hover {
-    filter: none;
-    background: transparent;
   }
 
   .credential-gate-icon {
@@ -598,12 +802,12 @@
     height: 25px;
   }
 
-  .credential-gate-button strong {
+  .credential-gate-panel strong {
     @apply block text-[1.02rem] font-semibold;
     letter-spacing: -0.03em;
   }
 
-  .credential-gate-button em {
+  .credential-gate-panel em {
     @apply mx-auto max-w-[260px] text-[12px] not-italic;
     color: #6e6e73;
     line-height: 1.45;
@@ -671,6 +875,26 @@
 
   .upload-status.hidden {
     display: none !important;
+  }
+
+  .token-validation {
+    margin-top: -4px;
+    border-radius: 16px;
+    background: #fbfbfd;
+    border-color: #ececf1;
+    color: #3a3a3c;
+  }
+
+  .token-validation.is-valid {
+    background: rgba(52, 199, 89, 0.08);
+    border-color: rgba(52, 199, 89, 0.18);
+    color: #1f6f3f;
+  }
+
+  .token-validation.is-error {
+    background: rgba(255, 59, 48, 0.08);
+    border-color: rgba(255, 59, 48, 0.18);
+    color: #a11b16;
   }
 
   .upload-tile .upload-status {
@@ -1189,7 +1413,7 @@
   }
 
   .query-entry {
-    @apply mx-auto mt-3 w-full;
+    @apply mx-auto mt-3 flex w-full items-center justify-center gap-2;
     max-width: min(620px, calc(100vw - 2rem));
     text-align: center;
   }

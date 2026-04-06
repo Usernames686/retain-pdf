@@ -10,6 +10,11 @@ export const state = {
   uploadedPageCount: 0,
   uploadedBytes: 0,
   appliedPageRange: "",
+  recentJobsOffset: 0,
+  recentJobsHasMore: true,
+  recentJobsDate: "",
+  validatedMineruToken: "",
+  mineruValidationStatus: "",
   desktopMode: false,
   desktopConfigured: false,
 };

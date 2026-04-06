@@ -15,6 +15,5 @@
 
 更细的实现细节仍保留在后端目录：
 
-- `backend/rust_api/api.md`
 - `backend/rust_api/API_SPEC.md`
 - `backend/rust_api/MinerU_OCR_Service_API.md`

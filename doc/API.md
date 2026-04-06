@@ -10,8 +10,7 @@
 - [存储结构](./api-storage.md)
 - [错误排查](./api-troubleshooting.md)
 
-后端原始细节文档仍保留在：
+后端实现相关的补充资料仍保留在：
 
-- `backend/rust_api/api.md`
 - `backend/rust_api/API_SPEC.md`
 - `backend/rust_api/MinerU_OCR_Service_API.md`

@@ -10,11 +10,8 @@
 4. [04-任务生命周期.md](/home/wxyhgk/tmp/Code/doc/rust_api/04-任务生命周期.md)
 5. [05-联调与排错.md](/home/wxyhgk/tmp/Code/doc/rust_api/05-联调与排错.md)
 6. [06-产物清单与下载.md](/home/wxyhgk/tmp/Code/doc/rust_api/06-产物清单与下载.md)
-
-这套拆分文档和 [backend/rust_api/api.md](/home/wxyhgk/tmp/Code/backend/rust_api/api.md) 是同一份契约的两个视图：
-
-- `backend/rust_api/api.md` 更像后端主说明
-- `doc/rust_api/` 更像前后端联调手册
+7. [07-任务列表接口.md](/home/wxyhgk/tmp/Code/doc/rust_api/07-任务列表接口.md)
+8. [08-Provider 校验接口.md](/home/wxyhgk/tmp/Code/doc/rust_api/08-Provider 校验接口.md)
 
 当前几个关键结论：
 

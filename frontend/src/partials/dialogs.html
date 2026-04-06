@@ -1,27 +1,51 @@
 <dialog id="browser-credentials-dialog" class="desktop-dialog">
   <form method="dialog" class="desktop-shell">
     <div class="desktop-head">
-      <h2>接口凭据</h2>
+      <div class="credential-dialog-head">
+        <h2>接口设置</h2>
+        <p>填写后会保存在当前浏览器中，可随时回来修改和检测。</p>
+      </div>
       <button id="browser-credentials-close-btn" type="submit" class="dialog-close-btn" aria-label="关闭">×</button>
     </div>
-    <div class="desktop-body">
-      <div class="grid">
-        <label>
-          <span>MinerU Token</span>
-          <input id="browser-mineru-token" type="text" autocomplete="off" placeholder="填写 MinerU Token" />
-          <span class="field-link">
-            <a href="https://mineru.net/apiManage/docs?openApplyModal=true" target="_blank" rel="noopener noreferrer">前往 MinerU 获取 Token</a>
-          </span>
-        </label>
-        <label>
-          <span>DeepSeek Key</span>
-          <input id="browser-api-key" type="text" autocomplete="off" placeholder="填写 DeepSeek API Key" />
-          <span class="field-link">
-            <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener noreferrer">前往 DeepSeek 获取 Key</a>
-          </span>
-        </label>
+    <div class="desktop-body credential-dialog-body">
+      <div class="credential-card-grid">
+        <section class="credential-card">
+          <div class="credential-card-head">
+            <div>
+              <h3>MinerU</h3>
+              <p>用于 OCR 解析和版面识别。</p>
+            </div>
+            <a class="credential-card-link" href="https://mineru.net/apiManage/docs?openApplyModal=true" target="_blank" rel="noopener noreferrer">获取 Token</a>
+          </div>
+          <label>
+            <span>MinerU Token</span>
+            <input id="browser-mineru-token" type="text" autocomplete="off" placeholder="填写 MinerU Token" />
+          </label>
+          <div class="credential-card-actions">
+            <button id="browser-mineru-validate-btn" type="button" class="secondary">检测 MinerU</button>
+            <span id="browser-mineru-validation" class="token-inline-status hidden">保存前会自动检测 MinerU Token。</span>
+          </div>
+        </section>
+
+        <section class="credential-card">
+          <div class="credential-card-head">
+            <div>
+              <h3>DeepSeek</h3>
+              <p>用于正文翻译和模型调用。</p>
+            </div>
+            <a class="credential-card-link" href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener noreferrer">获取 Key</a>
+          </div>
+          <label>
+            <span>DeepSeek Key</span>
+            <input id="browser-api-key" type="text" autocomplete="off" placeholder="填写 DeepSeek API Key" />
+          </label>
+          <div class="credential-card-actions">
+            <button id="browser-deepseek-validate-btn" type="button" class="secondary">检测 DeepSeek</button>
+            <span id="browser-deepseek-validation" class="token-inline-status hidden">可检测 DeepSeek 接口是否连通。</span>
+          </div>
+        </section>
       </div>
-      <div class="actions">
+      <div class="actions credential-dialog-actions">
         <button id="browser-credentials-save-btn" type="button">保存</button>
       </div>
     </div>
@@ -186,6 +210,10 @@
               <div class="info-row">
                 <span class="label">建议</span>
                 <span id="failure-suggestion" class="info-value">-</span>
+              </div>
+              <div class="info-row">
+                <span class="label">最近日志</span>
+                <span id="failure-last-log-line" class="info-value">-</span>
               </div>
               <div class="info-row">
                 <span class="label">可重试</span>

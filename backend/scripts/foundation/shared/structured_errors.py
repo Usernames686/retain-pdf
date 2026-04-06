@@ -109,6 +109,11 @@ def classify_exception(exc: BaseException, *, default_stage: str, provider: str 
         summary = "标准化文档校验失败"
         stage = "normalization"
         retryable = False
+    elif "source pdf not found" in lowered:
+        error_type = "source_pdf_missing"
+        summary = "源 PDF 缺失"
+        stage = "normalization"
+        retryable = False
     elif any(token in lowered for token in ("fitz.fitzerror", "pymupdf", "cannot open broken document", "file data error")):
         error_type = "source_pdf_open_failed"
         summary = "源 PDF 打开失败"
