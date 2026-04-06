@@ -15,6 +15,7 @@ pub struct AppConfig {
     pub run_ocr_job_script: PathBuf,
     pub run_normalize_ocr_script: PathBuf,
     pub run_translate_from_ocr_script: PathBuf,
+    pub run_failure_ai_diagnosis_script: PathBuf,
     pub uploads_dir: PathBuf,
     pub downloads_dir: PathBuf,
     pub jobs_db_path: PathBuf,
@@ -64,6 +65,9 @@ impl AppConfig {
         let run_translate_from_ocr_script = scripts_dir
             .join("entrypoints")
             .join("run_translate_from_ocr.py");
+        let run_failure_ai_diagnosis_script = scripts_dir
+            .join("entrypoints")
+            .join("diagnose_failure_with_ai.py");
         let uploads_dir = data_root.join("uploads");
         let downloads_dir = data_root.join("downloads");
         let jobs_db_path = data_root.join("db").join("jobs.db");
@@ -91,6 +95,7 @@ impl AppConfig {
             run_ocr_job_script,
             run_normalize_ocr_script,
             run_translate_from_ocr_script,
+            run_failure_ai_diagnosis_script,
             uploads_dir,
             downloads_dir,
             jobs_db_path,
@@ -149,6 +154,9 @@ impl AppConfig {
             run_translate_from_ocr_script: scripts_dir
                 .join("entrypoints")
                 .join("run_translate_from_ocr.py"),
+            run_failure_ai_diagnosis_script: scripts_dir
+                .join("entrypoints")
+                .join("diagnose_failure_with_ai.py"),
             uploads_dir,
             downloads_dir,
             jobs_db_path,

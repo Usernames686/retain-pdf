@@ -8,6 +8,7 @@ from foundation.config import fonts
 from foundation.config import layout
 from foundation.config import paths
 from foundation.config import runtime
+from foundation.shared.structured_errors import run_with_structured_failure
 from foundation.shared.schema_cli import SOURCE_JSON_MAINLINE_HELP
 from runtime.pipeline.book_pipeline import run_book_pipeline
 from services.translation.llm import DEFAULT_BASE_URL
@@ -152,4 +153,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_with_structured_failure(main, default_stage="translation", provider="translation")

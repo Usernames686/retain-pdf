@@ -211,6 +211,7 @@ mod tests {
             run_ocr_job_script: scripts_dir.join("run_ocr_job.py"),
             run_normalize_ocr_script: scripts_dir.join("run_normalize_ocr.py"),
             run_translate_from_ocr_script: scripts_dir.join("run_translate_from_ocr.py"),
+            run_failure_ai_diagnosis_script: scripts_dir.join("diagnose_failure_with_ai.py"),
             uploads_dir,
             downloads_dir,
             jobs_db_path: data_root.join("db").join("jobs.db"),

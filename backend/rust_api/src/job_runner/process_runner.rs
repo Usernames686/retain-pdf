@@ -7,15 +7,18 @@ use std::time::Instant;
 #[cfg(windows)]
 use anyhow::anyhow;
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::time::{sleep, timeout, Duration};
 use tracing::info;
 
-use crate::job_events::{persist_job, persist_runtime_job};
+use crate::job_events::{persist_job, persist_runtime_job, record_custom_runtime_event};
 #[cfg(test)]
 use crate::models::JobArtifacts;
-use crate::models::{now_iso, JobRuntimeState, JobStatusKind, ProcessResult};
+use crate::models::{now_iso, JobAiDiagnostic, JobRuntimeState, JobStatusKind, ProcessResult};
+use crate::storage_paths::resolve_data_path;
 use crate::AppState;
 
 use super::lifecycle::is_cancel_requested_any;
@@ -31,6 +34,31 @@ enum ProcessCompletionKind {
     Succeeded,
     SucceededWithShutdownNoise,
     Failed,
+}
+
+#[derive(Debug, Serialize)]
+struct FailureAiDiagnosisRequest<'a> {
+    job_id: &'a str,
+    workflow: &'a crate::models::WorkflowKind,
+    status: &'a JobStatusKind,
+    stage: Option<&'a str>,
+    stage_detail: Option<&'a str>,
+    failure: &'a crate::models::JobFailureInfo,
+    error: Option<&'a str>,
+    log_tail: &'a [String],
+    request_payload: &'a crate::models::ResolvedJobSpec,
+    runtime: Option<&'a crate::models::JobRuntimeInfo>,
+    ocr_provider_diagnostics: Option<&'a crate::ocr_provider::OcrProviderDiagnostics>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FailureAiDiagnosisResponse {
+    status: Option<String>,
+    summary: Option<String>,
+    root_cause: Option<String>,
+    suggestion: Option<String>,
+    confidence: Option<String>,
+    observed_signals: Option<Vec<String>>,
 }
 
 pub(crate) async fn execute_process_job(
@@ -127,6 +155,7 @@ pub(crate) async fn execute_process_job(
         should_treat_shutdown_noise_as_success(&latest_job, &stderr_text),
     );
     apply_process_completion(&mut latest_job, completion, &stderr_text);
+    maybe_attach_ai_failure_diagnosis(&state, &mut latest_job).await;
     Ok(latest_job)
 }
 
@@ -238,6 +267,133 @@ fn should_treat_shutdown_noise_as_success(job: &JobRuntimeState, stderr_text: &s
         .map(Path::new)
         .is_some_and(Path::exists);
     output_pdf_ready && summary_ready
+}
+
+async fn maybe_attach_ai_failure_diagnosis(state: &AppState, job: &mut JobRuntimeState) {
+    let Some(failure_snapshot) = job.failure.clone() else {
+        return;
+    };
+    if failure_snapshot.category != "unknown" || failure_snapshot.ai_diagnostic.is_some() {
+        return;
+    }
+    let script_path = &state.config.run_failure_ai_diagnosis_script;
+    if !script_path.exists() {
+        return;
+    }
+
+    let job_root = job
+        .artifacts
+        .as_ref()
+        .and_then(|artifacts| artifacts.job_root.as_ref())
+        .and_then(|job_root| resolve_data_path(&state.config.data_root, job_root).ok())
+        .unwrap_or_else(|| state.config.output_root.join(&job.job_id));
+    let logs_dir = job_root.join("logs");
+    let request_path = logs_dir.join("failure-ai-diagnosis.request.json");
+    let response_path = logs_dir.join("failure-ai-diagnosis.response.json");
+    if std::fs::create_dir_all(&logs_dir).is_err() {
+        return;
+    }
+
+    let request_payload = FailureAiDiagnosisRequest {
+        job_id: &job.job_id,
+        workflow: &job.workflow,
+        status: &job.status,
+        stage: job.stage.as_deref(),
+        stage_detail: job.stage_detail.as_deref(),
+        failure: &failure_snapshot,
+        error: job.error.as_deref(),
+        log_tail: &job.log_tail,
+        request_payload: &job.request_payload,
+        runtime: job.runtime.as_ref(),
+        ocr_provider_diagnostics: job
+            .artifacts
+            .as_ref()
+            .and_then(|artifacts| artifacts.ocr_provider_diagnostics.as_ref()),
+    };
+
+    let request_json = match serde_json::to_string_pretty(&request_payload) {
+        Ok(value) => value,
+        Err(_) => return,
+    };
+    if std::fs::write(&request_path, request_json).is_err() {
+        return;
+    }
+
+    let mut command = Command::new(&state.config.python_bin);
+    command
+        .arg("-u")
+        .arg(script_path)
+        .arg("--input-json")
+        .arg(&request_path)
+        .arg("--api-key")
+        .arg(&job.request_payload.translation.api_key)
+        .arg("--model")
+        .arg(&job.request_payload.translation.model)
+        .arg("--base-url")
+        .arg(&job.request_payload.translation.base_url)
+        .env("RUST_API_DATA_ROOT", &state.config.data_root)
+        .env("RUST_API_OUTPUT_ROOT", &state.config.output_root)
+        .env("OUTPUT_ROOT", &state.config.output_root)
+        .env("PYTHONUNBUFFERED", "1")
+        .current_dir(&state.config.project_root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let output = match timeout(Duration::from_secs(60), command.output()).await {
+        Ok(Ok(value)) => value,
+        _ => return,
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let response_record = json!({
+        "status_code": output.status.code(),
+        "stdout": stdout,
+        "stderr": stderr,
+    });
+    let _ = std::fs::write(
+        &response_path,
+        serde_json::to_string_pretty(&response_record).unwrap_or_default(),
+    );
+
+    if !output.status.success() || stdout.is_empty() {
+        return;
+    }
+
+    let Ok(response) = serde_json::from_str::<FailureAiDiagnosisResponse>(&stdout) else {
+        return;
+    };
+    if response.status.as_deref() != Some("ok") {
+        return;
+    }
+    let summary = response.summary.unwrap_or_default().trim().to_string();
+    if summary.is_empty() {
+        return;
+    }
+    let ai_diagnostic = JobAiDiagnostic {
+        summary: summary.clone(),
+        root_cause: response.root_cause.filter(|value| !value.trim().is_empty()),
+        suggestion: response.suggestion.filter(|value| !value.trim().is_empty()),
+        confidence: response.confidence.filter(|value| !value.trim().is_empty()),
+        observed_signals: response.observed_signals.unwrap_or_default(),
+    };
+    if let Some(failure) = job.failure.as_mut() {
+        failure.ai_diagnostic = Some(ai_diagnostic.clone());
+    }
+    job.updated_at = now_iso();
+    let event_payload = json!({
+        "category": failure_snapshot.category,
+        "summary": failure_snapshot.summary,
+        "ai_diagnostic": ai_diagnostic,
+    });
+    record_custom_runtime_event(
+        state,
+        job,
+        "info",
+        "failure_ai_diagnosed",
+        "AI 辅助诊断已生成",
+        Some(event_payload),
+    );
 }
 
 async fn read_stream<R>(reader: R) -> Result<String>
@@ -367,8 +523,16 @@ fn process_group_exists(pgid: i32) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+    use std::fs;
+    use std::sync::Arc;
+
     use super::*;
+    use crate::config::AppConfig;
+    use crate::db::Db;
     use crate::models::CreateJobInput;
+    use crate::AppState;
+    use tokio::sync::{Mutex, RwLock, Semaphore};
 
     fn build_job() -> JobRuntimeState {
         crate::models::JobSnapshot::new(
@@ -377,6 +541,65 @@ mod tests {
             vec!["python".to_string()],
         )
         .into_runtime()
+    }
+
+    fn test_state(test_name: &str) -> AppState {
+        let root = std::env::temp_dir().join(format!(
+            "rust-api-process-runner-{test_name}-{}-{}",
+            std::process::id(),
+            now_iso().replace([':', '.'], "-")
+        ));
+        let data_root = root.join("data");
+        let output_root = data_root.join("jobs");
+        let downloads_dir = data_root.join("downloads");
+        let uploads_dir = data_root.join("uploads");
+        let db_dir = data_root.join("db");
+        let rust_api_root = root.join("rust_api");
+        let scripts_dir = root.join("scripts");
+        fs::create_dir_all(&output_root).expect("create output root");
+        fs::create_dir_all(&downloads_dir).expect("create downloads dir");
+        fs::create_dir_all(&uploads_dir).expect("create uploads dir");
+        fs::create_dir_all(&db_dir).expect("create db dir");
+        fs::create_dir_all(&rust_api_root).expect("create rust_api root");
+        fs::create_dir_all(&scripts_dir).expect("create scripts dir");
+
+        let config = Arc::new(AppConfig {
+            project_root: root.clone(),
+            rust_api_root,
+            data_root: data_root.clone(),
+            scripts_dir: scripts_dir.clone(),
+            run_mineru_case_script: scripts_dir.join("run_mineru_case.py"),
+            run_ocr_job_script: scripts_dir.join("run_ocr_job.py"),
+            run_normalize_ocr_script: scripts_dir.join("run_normalize_ocr.py"),
+            run_translate_from_ocr_script: scripts_dir.join("run_translate_from_ocr.py"),
+            run_failure_ai_diagnosis_script: scripts_dir.join("diagnose_failure_with_ai.py"),
+            uploads_dir,
+            downloads_dir,
+            jobs_db_path: data_root.join("db").join("jobs.db"),
+            output_root,
+            python_bin: "python3".to_string(),
+            bind_host: "127.0.0.1".to_string(),
+            port: 41000,
+            simple_port: 41001,
+            upload_max_bytes: 0,
+            upload_max_pages: 0,
+            api_keys: HashSet::new(),
+            max_running_jobs: 1,
+        });
+
+        let db = Arc::new(Db::new(
+            config.jobs_db_path.clone(),
+            config.data_root.clone(),
+        ));
+        db.init().expect("init db");
+
+        AppState {
+            config,
+            db,
+            downloads_lock: Arc::new(Mutex::new(())),
+            canceled_jobs: Arc::new(RwLock::new(HashSet::new())),
+            job_slots: Arc::new(Semaphore::new(1)),
+        }
     }
 
     #[test]
@@ -474,5 +697,107 @@ mod tests {
         assert!(artifacts.normalized_document_json.is_none());
         assert!(artifacts.normalization_report_json.is_none());
         assert!(artifacts.schema_version.is_none());
+    }
+
+    #[tokio::test]
+    async fn maybe_attach_ai_failure_diagnosis_persists_ai_result_and_event() {
+        let state = test_state("ai-diagnosis");
+        let script = r#"#!/usr/bin/env python3
+import argparse
+import json
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--input-json", required=True)
+parser.add_argument("--api-key")
+parser.add_argument("--model")
+parser.add_argument("--base-url")
+args = parser.parse_args()
+
+payload = json.loads(Path(args.input_json).read_text(encoding="utf-8"))
+assert payload["failure"]["category"] == "unknown"
+print(json.dumps({
+    "status": "ok",
+    "summary": "AI diagnosis summary",
+    "root_cause": "AI root cause",
+    "suggestion": "AI suggestion",
+    "confidence": "medium",
+    "observed_signals": ["unknown-category", "runtime-test"]
+}))
+"#;
+        fs::write(&state.config.run_failure_ai_diagnosis_script, script).expect("write script");
+
+        let mut job = build_job();
+        job.job_id = "job-ai-diagnosis".to_string();
+        job.request_payload.runtime.job_id = job.job_id.clone();
+        job.request_payload.translation.api_key = "sk-test".to_string();
+        job.request_payload.translation.model = "deepseek-chat".to_string();
+        job.request_payload.translation.base_url = "https://api.deepseek.com/v1".to_string();
+        job.status = JobStatusKind::Failed;
+        job.stage = Some("failed".to_string());
+        job.stage_detail = Some("Python worker 执行失败".to_string());
+        job.error = Some("Traceback (most recent call last):\nRuntimeError: boom".to_string());
+        job.failure = Some(crate::models::JobFailureInfo {
+            stage: "translation".to_string(),
+            category: "unknown".to_string(),
+            code: None,
+            summary: "任务失败，但暂未识别出明确根因".to_string(),
+            root_cause: Some("Traceback (most recent call last):".to_string()),
+            retryable: true,
+            upstream_host: None,
+            provider: Some("translation".to_string()),
+            suggestion: Some("查看日志".to_string()),
+            last_log_line: Some("RuntimeError: boom".to_string()),
+            raw_error_excerpt: Some("RuntimeError: boom".to_string()),
+            raw_diagnostic: None,
+            ai_diagnostic: None,
+        });
+        job.artifacts = Some(JobArtifacts {
+            job_root: Some(format!("jobs/{}", job.job_id)),
+            ..JobArtifacts::default()
+        });
+        persist_runtime_job(&state, &job).expect("persist runtime job");
+
+        maybe_attach_ai_failure_diagnosis(&state, &mut job).await;
+
+        let failure = job.failure.as_ref().expect("failure");
+        assert_eq!(failure.category, "unknown");
+        let ai = failure.ai_diagnostic.as_ref().expect("ai diagnosis");
+        assert_eq!(ai.summary, "AI diagnosis summary");
+        assert_eq!(ai.root_cause.as_deref(), Some("AI root cause"));
+        assert_eq!(ai.suggestion.as_deref(), Some("AI suggestion"));
+        assert_eq!(ai.confidence.as_deref(), Some("medium"));
+        assert_eq!(
+            ai.observed_signals,
+            vec!["unknown-category".to_string(), "runtime-test".to_string()]
+        );
+
+        let request_log = state
+            .config
+            .output_root
+            .join(&job.job_id)
+            .join("logs")
+            .join("failure-ai-diagnosis.request.json");
+        let response_log = state
+            .config
+            .output_root
+            .join(&job.job_id)
+            .join("logs")
+            .join("failure-ai-diagnosis.response.json");
+        assert!(request_log.exists());
+        assert!(response_log.exists());
+
+        let events = state
+            .db
+            .list_job_events(&job.job_id, 20, 0)
+            .expect("list events");
+        let event = events
+            .iter()
+            .find(|item| item.event == "failure_ai_diagnosed")
+            .expect("failure_ai_diagnosed event");
+        let payload = event.payload.as_ref().expect("event payload");
+        assert_eq!(payload["category"], "unknown");
+        assert_eq!(payload["summary"], "任务失败，但暂未识别出明确根因");
+        assert_eq!(payload["ai_diagnostic"]["summary"], "AI diagnosis summary");
     }
 }

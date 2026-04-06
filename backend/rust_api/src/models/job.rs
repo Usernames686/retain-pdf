@@ -103,6 +103,25 @@ pub struct JobFailureInfo {
     pub suggestion: Option<String>,
     pub last_log_line: Option<String>,
     pub raw_error_excerpt: Option<String>,
+    pub raw_diagnostic: Option<JobRawDiagnostic>,
+    pub ai_diagnostic: Option<JobAiDiagnostic>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
+pub struct JobRawDiagnostic {
+    pub structured_error_type: Option<String>,
+    pub raw_exception_type: Option<String>,
+    pub raw_exception_message: Option<String>,
+    pub traceback: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
+pub struct JobAiDiagnostic {
+    pub summary: String,
+    pub root_cause: Option<String>,
+    pub suggestion: Option<String>,
+    pub confidence: Option<String>,
+    pub observed_signals: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

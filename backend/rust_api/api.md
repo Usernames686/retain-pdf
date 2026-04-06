@@ -396,10 +396,38 @@ X-API-Key: your-rust-api-key
     "provider": "unknown",
     "suggestion": "可直接重试；若频繁发生，建议降低并发或检查网络稳定性",
     "last_log_line": "ReadTimeout: HTTPSConnectionPool(host='api.deepseek.com', port=443)...",
-    "raw_error_excerpt": "ReadTimeout"
+    "raw_error_excerpt": "ReadTimeout",
+    "raw_diagnostic": {
+      "source": "python_structured_failure",
+      "label": "upstream_timeout",
+      "exception_type": "ReadTimeout",
+      "message": "HTTPSConnectionPool(host='api.deepseek.com', port=443): Read timed out.",
+      "traceback": "Traceback (most recent call last): ...",
+      "details": {
+        "upstream_host": "api.deepseek.com"
+      }
+    },
+    "ai_diagnostic": null
   }
 }
 ```
+
+失败字段补充约定：
+
+- `failure` 是当前唯一真源，失败展示、重试提示、运维排错都应优先读这里
+- `failure.raw_diagnostic`
+  - 表示后端额外保留的原始诊断上下文
+  - 当前可能来源：
+    - `python_structured_failure`：Python 入口脚本捕获异常后输出的结构化失败
+    - `rule_based_text_extract`：旧规则或纯文本日志回退提取
+  - 适合用于排错页、开发者模式、日志展开区，不建议直接原样展示给普通用户
+- `failure.ai_diagnostic`
+  - 仅在主分类仍为 `unknown` 时，后端才会尝试调用 AI 做补充诊断
+  - 它是补充信息，不会覆盖 `failure.category`
+  - 为空表示本次没有触发 AI 诊断，或 AI 诊断未产出有效结果
+- `failure_diagnostic`
+  - 仍然存在，但它只是 `failure` 的兼容映射视图
+  - 新接入方不要再把它当主真源
 
 ### 5.4 查询任务列表
 
@@ -445,6 +473,7 @@ X-API-Key: your-rust-api-key
 - `stage_progress`
 - `retry_scheduled`
 - `failure_classified`
+- `failure_ai_diagnosed`
 - `job_terminal`
 - 兼容保留：`status_changed`、`stage_updated`、`job_error`
 
@@ -453,6 +482,8 @@ X-API-Key: your-rust-api-key
 - `stage_transition` / `stage_progress` 的 payload 会附带 `active_stage_elapsed_ms`、`total_elapsed_ms`、`retry_count`、`stage_history`
 - `retry_scheduled` 的 payload 会标注 `scope / attempt / max_attempts / delay_seconds / reason`
 - `job_terminal` 的 payload 会标注 `total_elapsed_ms / retry_count / failure_category / failure_summary / failure_root_cause`
+- `failure_classified` 的 payload 会标注当前结构化失败归类结果
+- `failure_ai_diagnosed` 的 payload 会标注 AI 补充诊断结果；只有主分类仍是 `unknown` 时才可能出现
 
 事件流用途约定：
 
@@ -499,6 +530,30 @@ X-API-Key: your-rust-api-key
     {
       "job_id": "20260404153000-abcd12",
       "seq": 19,
+      "ts": "2026-04-04T15:33:46Z",
+      "level": "info",
+      "stage": "failed",
+      "event": "failure_ai_diagnosed",
+      "message": "AI 已补充失败归因",
+      "payload": {
+        "category": "unknown",
+        "summary": "任务失败，但暂未识别出明确根因",
+        "ai_diagnostic": {
+          "summary": "大概率是 Typst 编译阶段字体资源缺失",
+          "root_cause": "日志显示 typst 编译前已完成翻译，随后渲染阶段缺少字体或模板依赖",
+          "suggestion": "优先检查字体目录、typst 二进制和模板包是否完整",
+          "confidence": "medium",
+          "observed_signals": [
+            "stage=render",
+            "traceback present",
+            "typst compile failed"
+          ]
+        }
+      }
+    },
+    {
+      "job_id": "20260404153000-abcd12",
+      "seq": 20,
       "ts": "2026-04-04T15:33:45Z",
       "level": "error",
       "stage": "failed",
@@ -743,6 +798,8 @@ OCR 子任务同理：
 - `failure.suggestion`：建议动作
 - `failure.last_log_line`：最后一条高信号日志
 - `failure.raw_error_excerpt`：原始错误摘录
+- `failure.raw_diagnostic`：额外结构化原始诊断，上游 traceback / exception type / 识别细节都在这里
+- `failure.ai_diagnostic`：仅 `unknown` 失败可能附带的 AI 补充诊断
 - `failure_diagnostic.stage`：失败阶段
 - `failure_diagnostic.type`：归类后的错误类型
 - `failure_diagnostic.summary`：简短摘要
@@ -757,6 +814,10 @@ OCR 子任务同理：
 - `runtime.stage_history`：阶段耗时主来源，不需要再从事件时间戳反推
 - `runtime.final_failure_*`：最终失败归因摘要，便于列表页或概览页直接展示
 - `failure`：结构化失败归因，由后端在运行期直接分类并持久化
+- 失败归因优先级：
+  1. Python 结构化失败输出
+  2. Rust 侧规则分类
+  3. `unknown` 时再附加 AI 补充诊断
 - `failure_diagnostic`：兼容旧调用方的映射视图，本质上由 `failure` 投影而来
 - `error`：原始错误文本或摘要，不保证结构化
 

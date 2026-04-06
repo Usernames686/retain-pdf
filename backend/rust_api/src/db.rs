@@ -787,6 +787,8 @@ mod tests {
             suggestion: Some("重试".to_string()),
             last_log_line: Some("ReadTimeout".to_string()),
             raw_error_excerpt: Some("ReadTimeout".to_string()),
+            raw_diagnostic: None,
+            ai_diagnostic: None,
         }));
 
         db.save_job(&job).expect("save job");
