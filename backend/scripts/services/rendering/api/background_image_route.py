@@ -7,6 +7,7 @@ from services.rendering.background.detect import pick_primary_background_image
 from services.rendering.background.extract import extract_image_payload
 from services.rendering.background.extract import extract_image_rgb
 from services.rendering.background.extract import extract_raw_stream_image
+from services.rendering.background.extract import image_prefers_solid_fill
 from services.rendering.background.extract import raw_stream_image_meta
 from services.rendering.background.patch import merge_close_vertical_rects
 from services.rendering.background.patch import rebuilt_image_bytes
@@ -37,6 +38,7 @@ def replace_background_image_page(
     if not rects:
         return False
 
+    prefer_solid_fill = image_prefers_solid_fill(doc, xref)
     raw_meta = raw_stream_image_meta(doc, xref)
     if raw_meta is not None:
         raw_image = extract_raw_stream_image(doc, xref, raw_meta)
@@ -53,7 +55,12 @@ def replace_background_image_page(
     if image is None:
         return False
 
-    rebuilt = rewrite_background_image(image, image_rect, rects)
+    rebuilt = rewrite_background_image(
+        image,
+        image_rect,
+        rects,
+        prefer_solid_fill=prefer_solid_fill,
+    )
     image_bytes = rebuilt_image_bytes(rebuilt, payload)
     try:
         page.replace_image(xref, stream=image_bytes)

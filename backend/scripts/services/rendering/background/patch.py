@@ -6,6 +6,10 @@ import fitz
 from PIL import Image
 from PIL import ImageDraw
 
+from services.rendering.redaction.redaction_config import COVER_LIGHT_BG_MEDIAN_MIN
+from services.rendering.redaction.redaction_config import COVER_LIGHT_BG_P90_MIN
+from services.rendering.redaction.redaction_config import COVER_TEXT_CONTAMINATION_DARK_RATIO
+from services.rendering.redaction.redaction_config import COVER_TEXT_CONTAMINATION_DARK_VALUE
 from services.rendering.redaction.redaction_fill import quantile
 
 
@@ -18,6 +22,19 @@ def brightness_spread(pixels: list[tuple[int, int, int]]) -> int:
         return 255
     brightness = sorted(int((r + g + b) / 3) for r, g, b in pixels)
     return quantile(brightness, 9, 10) - quantile(brightness, 1, 10)
+
+
+def looks_like_text_contaminated_light_patch(pixels: list[tuple[int, int, int]]) -> bool:
+    if not pixels:
+        return False
+    brightness = sorted(int((r + g + b) / 3) for r, g, b in pixels)
+    median = quantile(brightness, 1, 2)
+    p90 = quantile(brightness, 9, 10)
+    if median < COVER_LIGHT_BG_MEDIAN_MIN or p90 < COVER_LIGHT_BG_P90_MIN:
+        return False
+    dark_pixels = sum(1 for value in brightness if value < COVER_TEXT_CONTAMINATION_DARK_VALUE)
+    dark_ratio = dark_pixels / max(len(brightness), 1)
+    return dark_ratio >= COVER_TEXT_CONTAMINATION_DARK_RATIO
 
 
 def map_rect_to_image(image_rect: fitz.Rect, image_size: tuple[int, int], rect: fitz.Rect) -> tuple[int, int, int, int] | None:
@@ -85,6 +102,8 @@ def pick_background_patch(image: Image.Image, box: tuple[int, int, int, int]) ->
         pixels = list(patch.getdata())
         if len(pixels) < 32:
             continue
+        if looks_like_text_contaminated_light_patch(pixels):
+            continue
         spread = brightness_spread(pixels)
         complexity_bucket = 0 if spread <= 18 else 1
         area = (candidate[2] - candidate[0]) * (candidate[3] - candidate[1])
@@ -136,16 +155,19 @@ def rewrite_background_image(
     image: Image.Image,
     image_rect: fitz.Rect,
     rects: list[fitz.Rect],
+    *,
+    prefer_solid_fill: bool = False,
 ) -> Image.Image:
     updated = image.copy()
     for rect in rects:
         mapped = map_rect_to_image(image_rect, updated.size, rect)
         if mapped is None:
             continue
-        patch = pick_background_patch(updated, mapped)
-        if patch is not None:
-            updated.paste(patch, (mapped[0], mapped[1]))
-            continue
+        if not prefer_solid_fill:
+            patch = pick_background_patch(updated, mapped)
+            if patch is not None:
+                updated.paste(patch, (mapped[0], mapped[1]))
+                continue
         updated.paste(sample_background_color(updated, mapped), mapped)
     return updated
 

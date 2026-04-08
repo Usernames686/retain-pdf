@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import re
 
 import fitz
 from PIL import Image
@@ -39,6 +40,15 @@ def _pdf_bool(value: str) -> bool:
 
 def _pdf_name(value: str) -> str:
     return str(value or "").strip()
+
+
+def _pdf_names(value_type: str, value: str) -> list[str]:
+    if value_type == "name":
+        name = _pdf_name(value)
+        return [name] if name else []
+    if value_type == "array":
+        return re.findall(r"/[A-Za-z0-9]+", str(value or ""))
+    return []
 
 
 def _pdf_int(value: str, default: int = 0) -> int:
@@ -99,9 +109,32 @@ def extract_raw_stream_image(doc: fitz.Document, xref: int, meta: dict) -> Image
         return None
 
 
+def image_prefers_solid_fill(doc: fitz.Document, xref: int) -> bool:
+    filter_type, filter_value = doc.xref_get_key(xref, "Filter")
+    bpc_type, bpc_value = doc.xref_get_key(xref, "BitsPerComponent")
+    image_mask_type, image_mask_value = doc.xref_get_key(xref, "ImageMask")
+    colorspace_type, colorspace_value = doc.xref_get_key(xref, "ColorSpace")
+
+    filters = _pdf_names(filter_type, filter_value)
+    bits_per_component = _pdf_int(bpc_value)
+    image_mask = image_mask_type == "bool" and _pdf_bool(image_mask_value)
+    color_space = _pdf_name(colorspace_value) if colorspace_type == "name" else ""
+
+    if image_mask:
+        return True
+    if bits_per_component == 1:
+        return True
+    if color_space == "/DeviceGray" and any(
+        filter_name in {"/JBIG2Decode", "/CCITTFaxDecode"} for filter_name in filters
+    ):
+        return True
+    return False
+
+
 __all__ = [
     "extract_image_payload",
     "extract_image_rgb",
     "extract_raw_stream_image",
+    "image_prefers_solid_fill",
     "raw_stream_image_meta",
 ]

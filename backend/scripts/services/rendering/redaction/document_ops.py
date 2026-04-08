@@ -2,6 +2,12 @@ from pathlib import Path
 
 import fitz
 
+from services.rendering.redaction.redaction_analysis import page_has_large_background_image
+
+
+EDITABLE_TEXT_MIN_WORDS = 20
+PSEUDO_EDITABLE_SCAN_MIN_WORDS = 80
+
 
 def save_optimized_pdf(doc: fitz.Document, output_pdf_path: Path) -> None:
     output_pdf_path.parent.mkdir(parents=True, exist_ok=True)
@@ -23,8 +29,27 @@ def strip_page_links(page: fitz.Page) -> None:
     return
 
 
+def page_word_count(page: fitz.Page) -> int:
+    try:
+        return len(page.get_text("words"))
+    except Exception:
+        return 0
+
+
+def page_is_pseudo_editable_scan(page: fitz.Page) -> bool:
+    words = page_word_count(page)
+    if words < PSEUDO_EDITABLE_SCAN_MIN_WORDS:
+        return False
+    return page_has_large_background_image(page)
+
+
 def page_has_editable_text(page: fitz.Page) -> bool:
-    return len(page.get_text("words")) >= 20
+    words = page_word_count(page)
+    if words < EDITABLE_TEXT_MIN_WORDS:
+        return False
+    if page_is_pseudo_editable_scan(page):
+        return False
+    return True
 
 
 def extract_single_page_pdf(source_pdf_path: Path, output_pdf_path: Path, page_idx: int) -> None:

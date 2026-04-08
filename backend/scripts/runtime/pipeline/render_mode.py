@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+import math
 
 import fitz
 
 from services.rendering.compress.analysis import source_pdf_has_vector_graphics
 from services.rendering.redaction.redaction import item_has_removable_text
+from services.rendering.redaction.document_ops import page_has_editable_text
+from services.rendering.redaction.document_ops import page_is_pseudo_editable_scan
 from services.rendering.redaction.shared import iter_valid_translated_items
 from services.rendering.redaction.shared import normalize_words
 
@@ -30,11 +33,22 @@ def resolve_page_range(total_pages: int, start_page: int, end_page: int) -> tupl
 
 def is_editable_pdf(doc: fitz.Document, start_page: int, end_page: int) -> bool:
     sample_pages = range(start_page, min(end_page, start_page + 2) + 1)
-    words = 0
+    sampled = 0
+    editable_pages = 0
+    pseudo_scan_pages = 0
     for page_idx in sample_pages:
         if 0 <= page_idx < len(doc):
-            words += len(doc[page_idx].get_text("words"))
-    return words >= 20
+            sampled += 1
+            page = doc[page_idx]
+            if page_is_pseudo_editable_scan(page):
+                pseudo_scan_pages += 1
+            if page_has_editable_text(page):
+                editable_pages += 1
+    if sampled == 0:
+        return False
+    if pseudo_scan_pages >= sampled:
+        return False
+    return editable_pages >= max(1, math.ceil(sampled / 2))
 
 
 def is_overlay_probe_candidate(item: dict) -> bool:
@@ -81,7 +95,7 @@ def resolve_effective_render_mode(
             end_page=sample_stop,
         )
         if not editable:
-            print("auto render mode selected: overlay (non-editable PDF; white-cover/redaction route)")
+            print("auto render mode selected: overlay (non-editable or pseudo-editable scan PDF; white-cover/redaction route)")
             return "overlay"
         if vector_heavy:
             print("auto render mode selected: overlay (editable vector-heavy PDF; cover-only redaction)")
