@@ -28,9 +28,11 @@ def overlay_translated_items_on_page(
     font_paths: list[Path] | None = None,
     temp_root: Path | None = None,
     cover_only: bool = False,
+    apply_source_overlay: bool = True,
 ) -> None:
     translated_items = mark_image_page_overlay_mode(page, translated_items)
-    apply_source_page_overlay(page, translated_items, cover_only=cover_only)
+    if apply_source_overlay:
+        apply_source_page_overlay(page, translated_items, cover_only=cover_only)
     overlay_pdf = compile_page_overlay_pdf(
         page.rect.width,
         page.rect.height,
@@ -64,6 +66,7 @@ def overlay_translated_pages_on_doc(
     font_paths: list[Path] | None = None,
     temp_root: Path | None = None,
     cover_only: bool = False,
+    apply_source_overlay: bool = True,
 ) -> None:
     translated_pages = prepare_render_payloads_by_page(translated_pages)
     ordered_page_indices, translated_pages = prepare_overlay_doc_pages(doc, translated_pages)
@@ -86,6 +89,7 @@ def overlay_translated_pages_on_doc(
             translated_pages,
             overlay_pdf,
             cover_only=cover_only,
+            apply_source_overlay=apply_source_overlay,
         )
         return
     except RuntimeError as exc:
@@ -114,6 +118,7 @@ def overlay_translated_pages_on_doc(
             sanitized_translated_pages,
             overlay_pdf,
             cover_only=cover_only,
+            apply_source_overlay=apply_source_overlay,
         )
         return
     except RuntimeError as exc:
@@ -133,4 +138,5 @@ def overlay_translated_pages_on_doc(
         font_paths=font_paths,
         temp_root=temp_root,
         cover_only=cover_only,
+        apply_source_overlay=apply_source_overlay,
     )

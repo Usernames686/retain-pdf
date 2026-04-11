@@ -19,6 +19,7 @@ from services.rendering.api.typst_page_renderer import build_book_typst_backgrou
 from services.rendering.api.typst_page_renderer import build_book_typst_pdf
 from services.rendering.api.typst_page_renderer import build_dual_book_pdf
 from services.rendering.api.typst_page_renderer import overlay_translated_pages_on_doc
+from services.rendering.preprocess.hidden_text_strip import build_hidden_text_stripped_pdf_copy
 from services.rendering.typst.shared import default_typst_temp_root
 
 
@@ -27,18 +28,39 @@ def _prepare_render_source_pdf(
     source_pdf_path: Path,
     output_pdf_path: Path,
     pdf_compress_dpi: int,
-) -> tuple[Path, Path | None]:
+    start_page: int = 0,
+    end_page: int = -1,
+) -> tuple[Path, list[Path]]:
+    temp_paths: list[Path] = []
+    render_source_path = source_pdf_path
+    typst_temp_root = default_typst_temp_root(output_pdf_path)
+
+    hidden_text_stripped_path = typst_temp_root / f"{output_pdf_path.stem}.source-hidden-text-stripped.pdf"
+    hidden_text_result = build_hidden_text_stripped_pdf_copy(
+        render_source_path,
+        hidden_text_stripped_path,
+        start_page=start_page,
+        end_page=end_page,
+    )
+    if hidden_text_result.changed and hidden_text_result.output_pdf_path is not None:
+        render_source_path = hidden_text_result.output_pdf_path
+        temp_paths.append(render_source_path)
+        print(f"render source pdf: using hidden-text stripped copy {render_source_path}", flush=True)
+    else:
+        hidden_text_stripped_path.unlink(missing_ok=True)
+
     if pdf_compress_dpi <= 0:
-        return source_pdf_path, None
+        return render_source_path, temp_paths
     compressed_source_path = (
         default_typst_temp_root(output_pdf_path) / f"{output_pdf_path.stem}.source-compressed.pdf"
     )
-    if build_image_compressed_pdf_copy(source_pdf_path, compressed_source_path, dpi=pdf_compress_dpi):
+    if build_image_compressed_pdf_copy(render_source_path, compressed_source_path, dpi=pdf_compress_dpi):
         print(f"render source pdf: using compressed copy {compressed_source_path}", flush=True)
-        return compressed_source_path, compressed_source_path
+        temp_paths.append(compressed_source_path)
+        return compressed_source_path, temp_paths
     compressed_source_path.unlink(missing_ok=True)
     print("render source pdf: source image compression skipped", flush=True)
-    return source_pdf_path, None
+    return render_source_path, temp_paths
 
 
 def render_translated_pages_map(
@@ -49,7 +71,7 @@ def render_translated_pages_map(
     pdf_compress_dpi: int = runtime.DEFAULT_PDF_COMPRESS_DPI,
     strip_links: bool = False,
 ) -> int:
-    render_source_pdf_path, temp_source_path = _prepare_render_source_pdf(
+    render_source_pdf_path, temp_source_paths = _prepare_render_source_pdf(
         source_pdf_path=source_pdf_path,
         output_pdf_path=output_pdf_path,
         pdf_compress_dpi=pdf_compress_dpi,
@@ -72,7 +94,7 @@ def render_translated_pages_map(
         save_optimized_pdf(doc, output_pdf_path)
     finally:
         doc.close()
-        if temp_source_path is not None:
+        for temp_source_path in temp_source_paths:
             temp_source_path.unlink(missing_ok=True)
     compress_pdf_images_only(output_pdf_path, dpi=pdf_compress_dpi)
     return len(translated_pages_map)
@@ -98,10 +120,12 @@ def build_book_from_translations(
     start = max(0, start_page)
     stop = max(translated_pages) if end_page < 0 else end_page
     selected_pages = select_translated_pages(translated_pages, start_page=start, end_page=stop)
-    render_source_pdf_path, temp_source_path = _prepare_render_source_pdf(
+    render_source_pdf_path, temp_source_paths = _prepare_render_source_pdf(
         source_pdf_path=source_pdf_path,
         output_pdf_path=output_pdf_path,
         pdf_compress_dpi=pdf_compress_dpi,
+        start_page=start,
+        end_page=stop,
     )
 
     try:
@@ -195,7 +219,7 @@ def build_book_from_translations(
         compress_pdf_images_only(output_pdf_path, dpi=pdf_compress_dpi)
         return len(selected_pages)
     finally:
-        if temp_source_path is not None:
+        for temp_source_path in temp_source_paths:
             temp_source_path.unlink(missing_ok=True)
 
 

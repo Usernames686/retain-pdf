@@ -42,6 +42,7 @@ def overlay_pages_from_single_pdf(
     overlay_pdf_path: Path,
     *,
     cover_only: bool = False,
+    apply_source_overlay: bool = True,
 ) -> None:
     overlay_doc = fitz.open(overlay_pdf_path)
     try:
@@ -52,7 +53,8 @@ def overlay_pages_from_single_pdf(
                 flush=True,
             )
             page = doc[page_idx]
-            apply_source_page_overlay(page, translated_pages[page_idx], cover_only=cover_only)
+            if apply_source_overlay:
+                apply_source_page_overlay(page, translated_pages[page_idx], cover_only=cover_only)
             page.show_pdf_page(page.rect, overlay_doc, overlay_page_idx, overlay=True)
     finally:
         overlay_doc.close()

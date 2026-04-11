@@ -15,6 +15,14 @@ impl PreparedSourcePdf {
     pub(super) fn is_subset(&self) -> bool {
         self.selected_pages.len() < self.total_pages as usize
     }
+
+    pub(super) fn provider_page_ranges(&self) -> &str {
+        if self.is_subset() {
+            ""
+        } else {
+            "all"
+        }
+    }
 }
 
 pub(super) fn prepare_uploaded_source_pdf(
@@ -223,7 +231,22 @@ mod tests {
 
         assert!(prepared.is_subset());
         assert_eq!(prepared.selected_pages, vec![2, 4, 5]);
+        assert_eq!(prepared.provider_page_ranges(), "");
         let saved = Document::load(&prepared.path).expect("load subset");
         assert_eq!(saved.get_pages().len(), 3);
+    }
+
+    #[test]
+    fn prepare_uploaded_source_pdf_keeps_provider_range_for_full_book() {
+        let dir = temp_dir("page-subset-full");
+        let upload_path = dir.join("input.pdf");
+        let source_dir = dir.join("source");
+        build_test_pdf(&upload_path, 5);
+
+        let prepared = prepare_uploaded_source_pdf(&upload_path, &source_dir, "")
+            .expect("prepare full book");
+
+        assert!(!prepared.is_subset());
+        assert_eq!(prepared.provider_page_ranges(), "all");
     }
 }

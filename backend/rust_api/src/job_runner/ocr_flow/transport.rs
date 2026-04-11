@@ -33,6 +33,11 @@ pub(super) async fn execute_transport(
                 prepared_source.selected_pages,
                 prepared_source.total_pages
             ));
+            job.request_payload.ocr.page_ranges =
+                prepared_source.provider_page_ranges().to_string();
+            job.append_log(
+                "cleared provider page_ranges because uploaded source pdf was already subsetted",
+            );
         }
         execute_local_transport(
             state,

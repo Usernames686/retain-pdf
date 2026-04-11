@@ -13,7 +13,15 @@ def _compress_pdf_images_only_impl(
     *,
     dpi: int = 200,
 ) -> bool:
-    return compress_pdf_images_only_impl(pdf_path, dpi=dpi)
+    try:
+        return compress_pdf_images_only_impl(pdf_path, dpi=dpi)
+    except Exception as exc:
+        print(
+            f"image-only compress: skipped for {pdf_path} "
+            f"reason={type(exc).__name__}: {exc}",
+            flush=True,
+        )
+        return False
 
 
 def build_image_compressed_pdf_copy(

@@ -114,7 +114,7 @@ def should_skip_recompress_image(obj: pikepdf.Object, info: dict) -> tuple[bool,
         return True, "missing-colorspace"
     if colorspace.startswith("/") and colorspace not in {"/DeviceRGB", "/DeviceCMYK", "/DeviceGray"}:
         return True, "non-device-colorspace"
-    if "ICCBased" in colorspace or "Separation" in colorspace or "DeviceN" in colorspace:
+    if "Separation" in colorspace or "DeviceN" in colorspace:
         return True, "complex-colorspace"
     if "/JPXDecode" in filter_names:
         return True, "jpxdecode"

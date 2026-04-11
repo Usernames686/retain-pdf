@@ -18,6 +18,16 @@ from services.rendering.typst.overlay_ops import overlay_translated_items_on_pag
 from services.rendering.typst.overlay_ops import overlay_translated_pages_on_doc
 
 
+def _build_overlay_base_doc(source_pdf_path: Path) -> fitz.Document:
+    source_doc = fitz.open(source_pdf_path)
+    output_doc = fitz.open()
+    try:
+        output_doc.insert_pdf(source_doc)
+    finally:
+        source_doc.close()
+    return output_doc
+
+
 def build_single_page_typst_pdf(
     source_pdf_path: Path,
     output_pdf_path: Path,
@@ -67,7 +77,7 @@ def build_book_typst_pdf(
     temp_root: Path | None = None,
     cover_only: bool = False,
 ) -> None:
-    doc = fitz.open(source_pdf_path)
+    doc = _build_overlay_base_doc(source_pdf_path)
     try:
         typst_temp_root = resolve_typst_temp_root(output_pdf_path, temp_root)
         overlay_translated_pages_on_doc(

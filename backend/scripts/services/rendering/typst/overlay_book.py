@@ -60,6 +60,7 @@ def overlay_pages_via_page_fallback(
     font_paths: list[Path] | None = None,
     temp_root: Path | None = None,
     cover_only: bool = False,
+    apply_source_overlay: bool = True,
 ) -> None:
     overlay_paths: dict[int, Path] = {}
     max_workers = compile_workers or default_compile_workers(len(page_specs))
@@ -91,7 +92,8 @@ def overlay_pages_via_page_fallback(
             flush=True,
         )
         page = doc[page_idx]
-        apply_source_page_overlay(page, translated_pages[page_idx], cover_only=cover_only)
+        if apply_source_overlay:
+            apply_source_page_overlay(page, translated_pages[page_idx], cover_only=cover_only)
         overlay_doc = fitz.open(overlay_paths[page_idx])
         try:
             page.show_pdf_page(page.rect, overlay_doc, 0, overlay=True)
