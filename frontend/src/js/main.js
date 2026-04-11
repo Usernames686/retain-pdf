@@ -65,6 +65,9 @@ import {
   updateJobWarning,
 } from "./ui.js";
 
+const DEVELOPER_PASSWORD = "Gk265157!";
+const DEVELOPER_AUTH_SESSION_KEY = "retainpdf.developer.auth.v1";
+
 function setText(id, value) {
   const el = $(id);
   if (el) {
@@ -331,39 +334,6 @@ function developerConfigWithDefaults() {
   };
 }
 
-function parseGlossaryText(rawText = "") {
-  const lines = `${rawText || ""}`.split(/\r?\n/);
-  const entries = [];
-  for (let index = 0; index < lines.length; index += 1) {
-    const rawLine = lines[index];
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) {
-      continue;
-    }
-    let parts = [];
-    if (rawLine.includes("\t")) {
-      parts = rawLine.split("\t").map((item) => item.trim());
-    } else if (line.includes("->")) {
-      parts = line.split("->").map((item) => item.trim());
-    } else if (line.includes("=>")) {
-      parts = line.split("=>").map((item) => item.trim());
-    } else {
-      parts = line.split(/\s+/).map((item) => item.trim());
-    }
-    parts = parts.filter(Boolean);
-    if (parts.length < 2) {
-      throw new Error(`术语表第 ${index + 1} 行格式无效。请使用“源词<TAB>目标词”或“源词 -> 目标词”。`);
-    }
-    const [source, target, ...rest] = parts;
-    entries.push({
-      source,
-      target,
-      note: rest.join(" ").trim(),
-    });
-  }
-  return entries;
-}
-
 function syncDeveloperDialogFromState() {
   const config = developerConfigWithDefaults();
   $("developer-model").value = config.model;
@@ -375,10 +345,62 @@ function syncDeveloperDialogFromState() {
   $("developer-timeout-seconds").value = `${config.timeoutSeconds}`;
 }
 
-function openDeveloperDialog() {
+function isDeveloperAuthorized() {
+  try {
+    return window.sessionStorage?.getItem(DEVELOPER_AUTH_SESSION_KEY) === "1";
+  } catch (_err) {
+    return false;
+  }
+}
+
+function markDeveloperAuthorized() {
+  try {
+    window.sessionStorage?.setItem(DEVELOPER_AUTH_SESSION_KEY, "1");
+  } catch (_err) {
+    // Ignore private mode/storage failures.
+  }
+}
+
+function showDeveloperSettingsDialog() {
   syncDeveloperDialogFromState();
   activateDeveloperTab("model");
   $("developer-dialog")?.showModal();
+}
+
+function openDeveloperDialog() {
+  if (isDeveloperAuthorized()) {
+    showDeveloperSettingsDialog();
+    return;
+  }
+  const passwordInput = $("developer-auth-password");
+  const errorBox = $("developer-auth-error");
+  if (passwordInput) {
+    passwordInput.value = "";
+  }
+  if (errorBox) {
+    errorBox.textContent = "";
+    errorBox.classList.add("hidden");
+  }
+  $("developer-auth-dialog")?.showModal();
+  passwordInput?.focus();
+}
+
+function submitDeveloperAuth() {
+  const passwordInput = $("developer-auth-password");
+  const errorBox = $("developer-auth-error");
+  const password = passwordInput?.value || "";
+  if (password !== DEVELOPER_PASSWORD) {
+    if (errorBox) {
+      errorBox.textContent = "开发者密码错误。";
+      errorBox.classList.remove("hidden");
+    }
+    passwordInput?.focus();
+    passwordInput?.select();
+    return;
+  }
+  markDeveloperAuthorized();
+  $("developer-auth-dialog")?.close();
+  showDeveloperSettingsDialog();
 }
 
 function saveDeveloperDialog() {
@@ -401,13 +423,6 @@ function resetDeveloperDialog() {
   syncDeveloperDialogFromState();
 }
 
-function clearGlossaryInput() {
-  const input = $("glossary-input");
-  if (input) {
-    input.value = "";
-  }
-}
-
 function activateDeveloperTab(tabName = "model") {
   document.querySelectorAll("[data-developer-tab]").forEach((tab) => {
     const active = tab.dataset.developerTab === tabName;
@@ -424,7 +439,6 @@ function activateDeveloperTab(tabName = "model") {
 function collectRunPayload() {
   const pageRanges = currentPageRanges();
   const developerConfig = developerConfigWithDefaults();
-  const glossaryEntries = parseGlossaryText($("glossary-input")?.value || "");
   return {
     workflow: "mineru",
     source: {
@@ -447,7 +461,6 @@ function collectRunPayload() {
       classify_batch_size: developerConfig.classifyBatchSize,
       rule_profile_name: DEFAULT_RULE_PROFILE,
       custom_rules_text: "",
-      glossary_entries: glossaryEntries,
       skip_title_translation: false,
     },
     render: {
@@ -1093,6 +1106,7 @@ function initializePage() {
   );
   [
     "query-dialog",
+    "developer-auth-dialog",
     "developer-dialog",
     "browser-credentials-dialog",
     "desktop-setup-dialog",
@@ -1120,8 +1134,14 @@ function initializePage() {
   $("mineru_token").addEventListener("input", saveBrowserStoredConfig);
   $("api_key").addEventListener("input", saveBrowserStoredConfig);
   $("job-form").addEventListener("submit", submitForm);
-  $("glossary-clear-btn")?.addEventListener("click", clearGlossaryInput);
   $("developer-btn")?.addEventListener("click", openDeveloperDialog);
+  $("developer-auth-submit-btn")?.addEventListener("click", submitDeveloperAuth);
+  $("developer-auth-password")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      submitDeveloperAuth();
+    }
+  });
   $("open-query-btn").addEventListener("click", openQueryDialog);
   $("developer-save-btn")?.addEventListener("click", saveDeveloperDialog);
   $("developer-reset-btn")?.addEventListener("click", resetDeveloperDialog);

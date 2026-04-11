@@ -97,6 +97,10 @@
     width: min(520px, calc(100vw - 24px));
   }
 
+  #developer-auth-dialog {
+    width: min(420px, calc(100vw - 24px));
+  }
+
   #developer-dialog .desktop-shell,
   #developer-dialog .desktop-body,
   #developer-dialog .developer-panels,
@@ -143,57 +147,6 @@
     @apply grid gap-4 p-6;
   }
 
-  .glossary-panel {
-    width: 100%;
-    display: grid;
-    gap: 10px;
-    padding: 14px 16px;
-    border: 1px solid #ececf1;
-    border-radius: 20px;
-    background: #ffffff;
-  }
-
-  .glossary-head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .glossary-head strong {
-    display: block;
-    font-size: 14px;
-    font-weight: 600;
-    color: #1d1d1f;
-  }
-
-  .glossary-head p {
-    margin-top: 4px;
-    font-size: 12px;
-    line-height: 1.55;
-    color: #6e6e73;
-  }
-
-  .glossary-input {
-    width: 100%;
-    min-height: 140px;
-    resize: vertical;
-    border: 1px solid #d2d2d7;
-    border-radius: 16px;
-    padding: 12px 14px;
-    background: #fbfbfd;
-    color: #1d1d1f;
-    font-size: 13px;
-    line-height: 1.6;
-    font-family: "SFMono-Regular", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-  }
-
-  .glossary-input:focus {
-    outline: none;
-    border-color: #1d1d1f;
-    background: #ffffff;
-  }
-
   #browser-credentials-dialog .desktop-body {
     gap: 12px;
     padding: 18px 20px 20px;
@@ -220,6 +173,35 @@
   .developer-dialog-body {
     gap: 12px;
     padding-top: 16px;
+  }
+
+  .developer-auth-body {
+    gap: 12px;
+    padding: 18px 20px 20px;
+  }
+
+  #developer-auth-dialog label {
+    gap: 8px;
+    font-size: 13px;
+  }
+
+  #developer-auth-dialog input[type="password"] {
+    height: 42px;
+    min-height: 42px;
+    border-radius: 16px;
+    padding: 0 14px;
+    font-size: 14px;
+  }
+
+  #developer-auth-dialog .credential-dialog-actions {
+    margin-top: 0;
+    justify-content: flex-end;
+  }
+
+  #developer-auth-dialog .credential-dialog-actions button {
+    min-height: 40px;
+    padding-inline: 16px;
+    font-size: 13px;
   }
 
   .credential-card-grid {
