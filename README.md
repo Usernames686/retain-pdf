@@ -4,210 +4,200 @@
   <img src="image/RetainPDF-github.svg" alt="RetainPDF" width="320" />
 </p>
 
-科学无国界，但文献有语言墙。这个项目面向科研论文、技术手册、教材与扫描型 PDF，目标不是只把文字翻出来，而是在翻译后尽量保留原始版面、公式位置、双栏结构和阅读体验。
+# 翻译链路修复说明（2026-04-17）
 
-它当前已经打通一条完整链路：上传 PDF 或 OCR 结果，经过 OCR、翻译、排版重建与产物登记，最终输出保留排版的中文 PDF，并支持 Markdown、JSON、Typst 与调试产物下载。
+## 背景
 
-除了基础链路之外，这个项目还持续在两个方向做了大量优化：
+本次排查包含两类问题：
 
-- 字体与排版侧：针对不同页面密度、框尺寸、双栏结构和覆盖区域，持续调整字体大小自适应、覆盖背景、行块回填与页面可读性，尽量避免“字太大塞不下”或“字太小看不清”
-- 翻译侧：针对长文块、公式占位符、代码/命令行参数、失败重试与降级策略做了专门处理，目标不是单纯把文本翻成中文，而是尽量让结果稳定、完整、可直接阅读
+1. 某些 PDF 已经可以跑通，但生成结果存在英文残留、中英叠字、版面覆盖等问题。
+2. 修复版面问题之后，出现了“之前能翻译的文件现在整单失败”的回归现象。
 
-## 项目特点
+本说明记录本轮定位、修复、线上同步和验证结果，方便后续留档与交接。
 
-### 翻译侧
+## 一、PDF 渲染层问题
 
-- 不走传统“先粗切块、再分别识别”的老路，而是尽量基于文字坐标和结构信息做原位回填
-- 面向扫描型 PDF、复杂行内公式、双栏论文、教材类长文档
-- 尽量避免代码块、命令行参数、公式占位符被误翻
-- 支持规则配置和自定义翻译策略，可按文档类型调整翻译提示与术语倾向
-- 表格识别支持按任务开关控制，适合在高精度识别和稳定性之间做取舍
-- 提供仍在持续打磨的高精度模式，目标是在复杂科研文档、混排页面和疑难结构场景下进一步逼近甚至超越常见 OCR 方案的效果上限
-- 高精度模式也是我后续最核心的演进方向之一
+### 现象
 
-### 排版与交付侧
+- 第 1、2、3 页出现明显中英重叠。
+- 中文正文已写入，但原英文正文没有被视觉上清掉。
+- 结果表现为不是翻译文本本身坏，而是“背景清理失败后又叠写中文”。
 
-- 持续优化字体大小自适应、覆盖背景与页面回填效果，尽量兼顾还原度和可读性
-- 支持图片型 PDF 的压缩优化，尽量在可读性和体积之间取平衡
-- 支持 Markdown / JSON / Typst / PDF 多种产物下载，方便继续编辑或二次处理
-- 支持 API 自动化、前端任务提交、桌面端打包与 Docker 交付
+### 根因
 
-简单对比：
+问题位于 Typst 渲染链路的 cleaned background 阶段。
 
-| 项目 | 扫描型 PDF | 复杂行内公式 | 代码不误翻 | 表格控制 | 自定义翻译策略 | 排版保留 | PDF 压缩优化 | API 自动化 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| PDFMathTranslate | ❌ | ❌ | ❌ | 弱 | 弱 | 一般 | 一般 | ✅ |
-| PolyglotPDF | ❌ | ❌ | ❌ | 弱 | 弱 | 一般 | 一般 | ✅ |
-| Doc2X | ✅ | ✅ | ❌ | 中 | 弱 | 强 | 弱 | ❌ 不开放 |
-| RetainPDF | ✅ | ✅ | ✅ | ✅ 可开关 | ✅ 可按规则配置 | 强 | ✅ 持续优化 | ✅ |
+在 `book-background-cleaned.pdf` 中，部分原英文正文虽然逻辑上参与了 redaction，但视觉上没有被真正盖白，最终 Typst 再把中文叠上去，就形成了中英重影。
 
-## 效果图
+### 修复
 
-### SCI 论文
+- 调整 redaction 标准路径：
+  - 即使块被判定为“文本可删除”，也同步附带背景填充。
+  - 不再依赖 PDF 内部文本删除一定成功。
+- 增加回归测试，确保可移除文本块会带 fill 进入 redaction。
 
-![SCI 示例 1](image/image%201.png)
+### 结果
 
-![SCI 示例 2](image/image%202.png)
+- 第 1、2、3 页中英叠字问题已消失。
+- 修正后的 PDF 已覆盖回原任务输出。
 
-### 图片型 / 扫描版 PDF
+## 二、翻译链路回归问题
 
-![扫描版示例 1](image/image%203.png)
+### 现象
 
-![扫描版示例 2](image/image%207.png)
+网站上出现“任务不是翻译效果差，而是直接失败”的情况。
 
-### 图书类
+近期失败单的典型模式是：
 
-![图书示例 1](image/image%204.png)
+- 某个单独块在 plain-text、structured、raw、sentence-level fallback 全部走完后，
+- 仍然因为 `EnglishResidueError` 或类似校验异常被抛出，
+- 最后把整页甚至整单任务一起打死。
 
-![图书示例 2](image/image%205.png)
+### 关键结论
 
-![图书示例 3](image/image%206.png)
+#### 1. provider 的翻译 key 不是登录 token
 
-## 小白上手指南
+线上真实翻译使用的 provider key 来自任务请求中的：
 
-### 下载方式
+`translation.api_key`
 
-如果你只是想直接使用：
+它会沿着以下路径进入运行时：
 
-1. 打开 [GitHub Releases](https://github.com/wxyhgk/retain-pdf/releases)
-2. 下载对应平台的发布包
-3. Windows 用户优先下载 `Setup.exe` 安装版
-4. macOS 用户下载 `.dmg` 安装包
-5. Linux 用户下载 `.deb` 安装包
+1. Rust API 接收创建任务请求。
+2. `translation.api_key` 写入 job request payload。
+3. job runner 启动 Python worker 时，把它作为 `--api-key` 传入。
 
-如果你想自己部署服务，优先用 Docker 方式。
+因此：
 
-### Windows 桌面端
+- Rust API 的 `X-API-Key` 是接口鉴权 key。
+- 翻译 provider key 是任务级参数，不是同一个东西。
+- 手工 `translate-only` 复跑时，如果没有真实 provider key，就不能代表线上真实任务一定没带 key。
 
-![RetainPDF Windows 桌面端](image/RetainPDF-desktop.png)
+#### 2. 真正的回归点是“单块异常升级成整单失败”
 
-### 我该选哪种方式
+根因不是整个翻译服务不可用，而是翻译链路中某些单块校验异常没有被 item 级隔离。
 
-- 如果你只是自己在 Windows 电脑上使用，优先选 GitHub Releases 里的桌面版
-- 如果你在 macOS 上只是自己测试使用，也可以直接下载 GitHub Releases 里的 mac 包
-- 如果你想给局域网、团队或多台设备一起用，优先选 Docker 部署
-- 如果你希望后续自己更新镜像、改配置、接自己的 API key，也优先选 Docker 部署
-- 如果你不想关心端口、容器、环境变量，优先选桌面版
+也就是说：
+
+- 某个块翻译后仍被判断为英文残留、
+- 或者命中了其他 `ValueError` 类校验异常，
+- 本应只影响该块，
+- 但之前实际会一路向上抛出，导致整个批次失败。
+
+## 三、本次翻译链路修复
+
+### 已完成改动
+
+#### 1. 重复 English residue 降级为内部 keep_origin
+
+在 repeated `EnglishResidueError` / `SuspiciousKeepOriginError` 且 sentence-level 也失败时：
+
+- 不再抛错终止整单；
+- 改为返回内部降级结果：
+  - `decision = keep_origin`
+  - `_internal_reason = english_residue_repeated`
+    或
+  - `_internal_reason = suspicious_keep_origin_repeated`
+
+同时：
+
+- 这类内部降级结果不会写入缓存，
+- 避免污染后续任务。
+
+#### 2. 补上 item 级异常隔离
+
+在 `translate_items_plain_text()` 中加入了单块级保护：
+
+- 如果某个 item 在单块翻译重试链路中抛出可恢复的 `ValueError` 类校验异常，
+- 则该 item 会就地降级为内部 `keep_origin`，
+- 不再继续向上抛出，
+- 同批其他 item 继续正常翻译。
+
+新增内部降级原因：
+
+- `single_item_validation_failed`
+
+这样可以避免“一个坏块把整个批次拖死”。
+
+### 本次涉及文件
+
+#### 渲染修复
+
+- `backend/scripts/services/rendering/redaction/redaction_routes.py`
+- `backend/scripts/devtools/tests/rendering/test_typst_render_refactor.py`
+
+#### 翻译修复
+
+- `backend/scripts/services/translation/llm/placeholder_guard.py`
+- `backend/scripts/services/translation/llm/fallbacks.py`
+- `backend/scripts/devtools/tests/translation/test_keep_origin_recovery.py`
+
+## 四、验证结果
+
+### 本地验证
+
+已通过：
+
+- `test_typst_render_refactor.py`
+- `test_render_mode.py`
+- `test_keep_origin_recovery.py`
+- `test_translation_json_recovery.py`
+
+### 容器内验证
+
+已将补丁同步到运行中的容器：
+
+- `retainpdf-app-1`
+
+并完成最小复现验证：
+
+- 同批中正常 item 仍然返回翻译结果；
+- 失败 item 会降级成内部 `keep_origin`；
+- 不再导致整批中断。
+
+### 线上状态
+
+当前状态为：
+
+- 服务器源码已同步；
+- 运行中的容器已同步；
+- 新发起的任务会走到本次修复后的逻辑。
 
 说明：
 
-- Windows 版本当前以安装版 `Setup.exe` 为主
-- GitHub Releases 里的 Windows `Setup.exe` 会内置桌面运行所需的 Python 运行时，不要求用户自己装 Python
-- macOS 版本当前提供 `.dmg` 构建包
-- Linux 版本当前提供 `.deb` 构建包，适合 Debian / Ubuntu 系发行版
-- 当前桌面端已经覆盖 Windows / macOS / Linux 三个平台
+- 本次是直接把补丁同步进线上运行容器；
+- 没有重建镜像；
+- 也没有重启整站。
 
-### Docker 部署
+## 五、已知剩余问题
 
-当前仓库提供了 Docker 交付目录：
+虽然“整单失败”问题已经明显收敛，但仍有一个未完全闭环的点：
 
-- [docker/delivery/README.md](docker/delivery/README.md)
-- [docker/delivery/docker-compose.yml](docker/delivery/docker-compose.yml)
+- 目前没有拿到真实可用的 provider API key 做完整线上实跑复验；
+- 因此已经完成：
+  - 本地测试验证
+  - 容器内最小复现验证
+- 但尚未完成：
+  - 指定真实文件的 provider-backed 全链路重跑验证
 
-基本步骤：
+另外，部分 PDF 即使不再失败，翻译产物中仍可能存在：
 
-```bash
-git clone https://github.com/wxyhgk/retain-pdf.git
-cd retain-pdf/docker/delivery
-docker compose up -d
-```
+- OCR 重复句
+- 粘连重复
+- 模型自述残留
 
-启动后默认访问：
+这些属于翻译质量清洗问题，不是本轮“整单失败”回归的主因，但后续仍建议继续收。
 
-```text
-http://127.0.0.1:40001
-```
+## 六、结论
 
-默认端口：
+本轮修复后的结论如下：
 
-- `40001`：前端页面
-- `41000`：Rust API
-- `42000`：简便同步接口
+- PDF 中英叠字问题已经定位并修复，原因是 cleaned background 阶段未真正视觉清底。
+- “之前能翻译的文件现在整单失败”的回归问题，主要根因是单块校验异常缺少 item 级隔离。
+- 当前线上环境已经同步到修复版本。
+- 新任务会使用修复后的逻辑运行。
 
-### Docker 更新
+如果后续继续推进，建议优先顺序为：
 
-如果只是更新到最新镜像版本：
-
-```bash
-cd retain-pdf/docker/delivery
-docker compose pull
-docker compose up -d
-```
-
-如果你要切换到指定镜像版本，也可以这样：
-
-```bash
-cd retain-pdf/docker/delivery
-APP_IMAGE=wxyhgk/retainpdf-app:latest \
-WEB_IMAGE=wxyhgk/retainpdf-web:latest \
-docker compose up -d
-```
-
-更新后建议执行一次状态检查：
-
-```bash
-docker compose ps
-```
-
-当前镜像地址：
-
-- [wxyhgk/retainpdf-app](https://hub.docker.com/r/wxyhgk/retainpdf-app)
-- [wxyhgk/retainpdf-web](https://hub.docker.com/r/wxyhgk/retainpdf-web)
-
-## 开发者
-
-### 文档入口
-
-建议按下面顺序阅读。
-
-- [当前 API 文档](doc/API.md)
-- [文档目录](doc/README.md)
-- [工程评价与后续执行计划](doc/工程评价与后续执行计划.md)
-- [服务总览](doc/api-overview.md)
-- [本地启动与配置](doc/api-dev.md)
-- [接口说明](doc/api-endpoints.md)
-- [存储结构](doc/api-storage.md)
-- [错误排查](doc/api-troubleshooting.md)
-
-### 代码与子模块说明
-
-- [后端脚本说明](backend/scripts/README.md)
-- [旧 FastAPI 包装层](backend/Fast_API/README.md)
-- `frontend/`：当前浏览器前端静态资源与桌面端打包输入目录
-
-### 当前目录结构
-
-- `frontend/`
-  浏览器前端、桌面壳、预览实验页面。
-- `backend/`
-  Rust API、Python 脚本、嵌入式 Python、旧 FastAPI 包装层、历史工作区。
-- `docker/`
-  Dockerfile、发布脚本、交付用 compose 配置。
-- `data/`
-  本地运行输出、任务目录、历史样本数据。
-
-### 当前工程判断
-
-RetainPDF 目前已经可以完成从 PDF 上传、OCR、翻译、排版重建到产物下载的完整链路。
-
-接下来我的重点不是盲目堆功能，而是继续把下面几件事做稳：
-
-- 工程一致性
-- API 与产物契约稳定性
-- 构建可复现性
-- 长文块与公式场景下的翻译稳定性
-
-如果你想了解我接下来准备怎么推进，可以看：
-
-- [工程评价与后续执行计划](doc/工程评价与后续执行计划.md)
-
-### 欢迎一起参与
-
-如果你也对下面这些方向感兴趣，欢迎一起把这个项目继续往前做：
-
-- 高精度 OCR / 疑难版面解析
-- 长文块与公式场景下的翻译稳定性
-- 排版回填、字体自适应与 PDF 渲染
-- 桌面端、Docker 交付与工程化完善
-
-不管你更擅长算法、前端、后端还是部署，只要你也想把“真正能用的 PDF 保留排版翻译”这件事做深，欢迎进来一起搞。
+1. 用真实 provider key 选一份曾经失败的 PDF 做线上实跑复验。
+2. 继续优化重复句、OCR 粘连重复、模型思考残留等翻译质量问题。
