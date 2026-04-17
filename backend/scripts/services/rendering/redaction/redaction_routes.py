@@ -81,7 +81,7 @@ def apply_standard_redaction(
     for rect, item, _translated_text in valid_items:
         if fill_background is None:
             if item_has_removable_text(page, item, rect):
-                redactions.append((rect, None))
+                redactions.append((rect, (1, 1, 1)))
                 continue
             if item_should_use_cover_only(rect, drawing_rects):
                 cover_rects.append(rect)

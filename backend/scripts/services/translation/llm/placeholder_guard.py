@@ -5,16 +5,36 @@ import re
 
 from services.document_schema.semantics import is_body_structure_role
 from services.translation.diagnostics import TranslationDiagnosticsCollector
+from services.translation.llm.deepseek_client import unwrap_translation_shell
+from services.translation.payload.formula_protection import protected_map_from_formula_map
+from services.translation.payload.formula_protection import protect_glossary_terms
+from services.translation.payload.formula_protection import PROTECTED_TOKEN_RE
 from services.translation.policy.metadata_filter import looks_like_url_fragment
 from services.translation.policy.reference_section import looks_like_reference_entry_text
 from services.translation.policy.soft_hints import looks_like_code_literal_text_value
 
 
-PLACEHOLDER_RE = re.compile(r"\[\[FORMULA_\d+]]")
+FORMAL_PLACEHOLDER_RE = re.compile(r"<f\d+-[0-9a-z]{3}/>|<t\d+-[0-9a-z]{3}/>|\[\[FORMULA_\d+]]")
+ALIAS_PLACEHOLDER_RE = re.compile(r"@@P\d+@@")
+PLACEHOLDER_RE = re.compile(rf"{PROTECTED_TOKEN_RE.pattern}|@@P\d+@@")
+FORMULA_TOKEN_RE = re.compile(r"<f\d+-[0-9a-z]{3}/>|\[\[FORMULA_\d+]]|@@P\d+@@")
 EN_WORD_RE = re.compile(r"[A-Za-z]+(?:[-'][A-Za-z]+)?")
 KEEP_ORIGIN_LABEL = "keep_origin"
 INTERNAL_PLACEHOLDER_DEGRADED_REASON = "placeholder_unstable"
 SHORT_FRAGMENT_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._/-]{0,7}$")
+CLAUSE_SPLIT_RE = re.compile(r"[^。！？；.!?;\n]+[。！？；.!?;\n]?")
+META_TRANSLATION_PHRASES = (
+    "translating ocr text",
+    "i need to translate",
+    "should i translate",
+    "it's best to translate",
+    "i'll aim to",
+    "i will aim to",
+    "the source repeats due to ocr",
+    "likely with repeated clauses",
+)
+ADJACENT_DUPLICATE_MIN_CHARS = 12
+ADJACENT_DUPLICATE_MAX_CHARS = 120
 
 
 class SuspiciousKeepOriginError(ValueError):
@@ -60,6 +80,40 @@ class PlaceholderInventoryError(ValueError):
         self.translated_text = translated_text
 
 
+class EmptyTranslationError(ValueError):
+    def __init__(self, item_id: str) -> None:
+        super().__init__(f"{item_id}: empty translation output")
+        self.item_id = item_id
+
+
+class EnglishResidueError(ValueError):
+    def __init__(
+        self,
+        item_id: str,
+        *,
+        source_text: str = "",
+        translated_text: str = "",
+    ) -> None:
+        super().__init__(f"{item_id}: translated output still looks predominantly English")
+        self.item_id = item_id
+        self.source_text = source_text
+        self.translated_text = translated_text
+
+
+class TranslationProtocolError(ValueError):
+    def __init__(
+        self,
+        item_id: str,
+        *,
+        source_text: str = "",
+        translated_text: str = "",
+    ) -> None:
+        super().__init__(f"{item_id}: translated output still contains protocol/json shell")
+        self.item_id = item_id
+        self.source_text = source_text
+        self.translated_text = translated_text
+
+
 def normalize_decision(value: str) -> str:
     normalized = (value or "translate").strip().lower().replace("-", "_")
     if normalized in {"keep", "skip", "no_translate", "keeporigin"}:
@@ -71,16 +125,22 @@ def normalize_decision(value: str) -> str:
 
 def result_entry(decision: str, translated_text: str) -> dict[str, str]:
     normalized_decision = normalize_decision(decision)
-    return {
+    payload = {
         "decision": normalized_decision,
         "translated_text": "" if normalized_decision == KEEP_ORIGIN_LABEL else (translated_text or "").strip(),
     }
+    payload["final_status"] = "kept_origin" if normalized_decision == KEEP_ORIGIN_LABEL else "translated"
+    return payload
 
 
 def internal_keep_origin_result(reason: str) -> dict[str, str]:
     result = result_entry(KEEP_ORIGIN_LABEL, "")
     result["_internal_reason"] = reason
     return result
+
+
+def is_internal_keep_origin_degraded(payload: dict[str, str]) -> bool:
+    return bool(str(payload.get("_internal_reason", "") or "").strip())
 
 
 def is_internal_placeholder_degraded(payload: dict[str, str]) -> bool:
@@ -170,7 +230,7 @@ def repair_safe_duplicate_placeholders(source_text: str, translated_text: str) -
 
 
 def has_formula_placeholders(item: dict) -> bool:
-    return bool(placeholders(unit_source_text(item)))
+    return bool(FORMULA_TOKEN_RE.findall(unit_source_text(item)))
 
 
 def placeholder_alias_maps(item: dict) -> tuple[dict[str, str], dict[str, str]]:
@@ -178,16 +238,37 @@ def placeholder_alias_maps(item: dict) -> tuple[dict[str, str], dict[str, str]]:
     source_set = set(source_sequence)
     original_to_alias: dict[str, str] = {}
     alias_to_original: dict[str, str] = {}
-    next_alias_id = 900_000
+    next_alias_id = 1
     for placeholder in dict.fromkeys(source_sequence):
-        alias = f"[[FORMULA_{next_alias_id}]]"
+        alias = f"@@P{next_alias_id}@@"
         while alias in source_set or alias in alias_to_original:
             next_alias_id += 1
-            alias = f"[[FORMULA_{next_alias_id}]]"
+            alias = f"@@P{next_alias_id}@@"
         original_to_alias[placeholder] = alias
         alias_to_original[alias] = placeholder
         next_alias_id += 1
     return original_to_alias, alias_to_original
+
+
+def item_with_runtime_hard_glossary(item: dict, glossary_entries: list[dict] | list[object] | None) -> dict:
+    normalized_map = list(item.get("translation_unit_protected_map") or item.get("protected_map") or [])
+    if not normalized_map and item.get("translation_unit_formula_map"):
+        normalized_map = protected_map_from_formula_map(item.get("translation_unit_formula_map") or [])
+    elif not normalized_map and item.get("formula_map"):
+        normalized_map = protected_map_from_formula_map(item.get("formula_map") or [])
+    protected_text, protected_map = protect_glossary_terms(
+        unit_source_text(item),
+        glossary_entries=glossary_entries,
+        existing_map=normalized_map,
+    )
+    if protected_text == unit_source_text(item) and protected_map == normalized_map:
+        return dict(item)
+    updated = dict(item)
+    updated["translation_unit_protected_source_text"] = protected_text
+    updated["protected_source_text"] = protected_text
+    updated["translation_unit_protected_map"] = protected_map
+    updated["protected_map"] = protected_map
+    return updated
 
 
 def replace_placeholders(text: str, mapping: dict[str, str]) -> str:
@@ -218,7 +299,10 @@ def restore_placeholder_aliases(
     restored: dict[str, dict[str, str]] = {}
     for item_id, payload in result.items():
         translated_text = replace_placeholders(str(payload.get("translated_text", "") or ""), mapping)
-        restored[item_id] = result_entry(str(payload.get("decision", "translate") or "translate"), translated_text)
+        restored_payload = result_entry(str(payload.get("decision", "translate") or "translate"), translated_text)
+        if payload.get("final_status"):
+            restored_payload["final_status"] = str(payload.get("final_status", "") or restored_payload["final_status"])
+        restored[item_id] = restored_payload
     return restored
 
 
@@ -252,6 +336,142 @@ def looks_like_english_prose(text: str) -> bool:
     if alpha_chars < 30:
         return False
     return True
+
+
+def _english_word_count(text: str) -> int:
+    return len(EN_WORD_RE.findall(strip_placeholders(text)))
+
+
+def _zh_char_count(text: str) -> int:
+    return sum(1 for ch in strip_placeholders(text) if "\u4e00" <= ch <= "\u9fff")
+
+
+def _strip_translation_meta_preamble(text: str) -> str:
+    translated = str(text or "").strip()
+    if not translated:
+        return translated
+    first_zh_index = next((idx for idx, ch in enumerate(translated) if "\u4e00" <= ch <= "\u9fff"), -1)
+    if first_zh_index <= 0:
+        return translated
+    prefix = normalize_inline_whitespace(translated[:first_zh_index]).lower()
+    if not prefix:
+        return translated
+    if not any(phrase in prefix for phrase in META_TRANSLATION_PHRASES):
+        return translated
+    stripped = translated[first_zh_index:].lstrip()
+    return stripped or translated
+
+
+def _collapse_adjacent_duplicate_clauses(text: str) -> str:
+    translated = str(text or "").strip()
+    if not translated:
+        return translated
+    clauses = [clause for clause in CLAUSE_SPLIT_RE.findall(translated) if clause.strip()]
+    if len(clauses) < 2:
+        return translated
+
+    collapsed = list(clauses)
+    changed = True
+    while changed:
+        changed = False
+        next_clauses: list[str] = []
+        index = 0
+        while index < len(collapsed):
+            current = collapsed[index]
+            current_key = normalize_inline_whitespace(current)
+            if (
+                index + 1 < len(collapsed)
+                and len(strip_placeholders(current_key)) >= 12
+                and current_key
+                and current_key == normalize_inline_whitespace(collapsed[index + 1])
+            ):
+                next_clauses.append(current)
+                index += 2
+                changed = True
+                continue
+            next_clauses.append(current)
+            index += 1
+        collapsed = next_clauses
+    if len(collapsed) == len(clauses):
+        return translated
+    return "".join(collapsed).strip()
+
+
+def _collapse_adjacent_duplicate_spans(text: str) -> str:
+    translated = str(text or "").strip()
+    if not translated:
+        return translated
+    collapsed = translated
+    changed = True
+    while changed:
+        changed = False
+        index = 0
+        pieces: list[str] = []
+        while index < len(collapsed):
+            matched = False
+            max_window = min(ADJACENT_DUPLICATE_MAX_CHARS, (len(collapsed) - index) // 2)
+            for window in range(max_window, ADJACENT_DUPLICATE_MIN_CHARS - 1, -1):
+                left = collapsed[index : index + window]
+                if not left.strip():
+                    continue
+                join = index + window
+                while join < len(collapsed) and collapsed[join].isspace():
+                    join += 1
+                right = collapsed[join : join + window]
+                if normalize_inline_whitespace(left) != normalize_inline_whitespace(right):
+                    continue
+                pieces.append(left)
+                index = join + window
+                changed = True
+                matched = True
+                break
+            if matched:
+                continue
+            pieces.append(collapsed[index])
+            index += 1
+        collapsed = "".join(pieces)
+    return collapsed.strip()
+
+
+def _leading_english_word_count(text: str) -> int:
+    cleaned = strip_placeholders(text or "")
+    if not cleaned.strip():
+        return 0
+    count = 0
+    for token in re.findall(r"[A-Za-z]+(?:[-'][A-Za-z]+)?|[\u4e00-\u9fff]+|[^\s]", cleaned):
+        if re.fullmatch(r"[\u4e00-\u9fff]+", token):
+            break
+        if EN_WORD_RE.fullmatch(token):
+            count += 1
+            continue
+        if token.isspace():
+            continue
+        if token in {'"', "'", "(", ")", "[", "]", "{", "}", ",", ".", ";", ":", "!", "?", "-", "/"}:
+            continue
+        if count > 0:
+            break
+    return count
+
+
+def looks_like_untranslated_english_output(item: dict, translated_text: str) -> bool:
+    source_text = unit_source_text(item).strip()
+    translated = str(translated_text or "").strip()
+    if not translated:
+        return False
+    if not should_force_translate_body_text(item):
+        return False
+    if not looks_like_english_prose(source_text):
+        return False
+    english_words = _english_word_count(translated)
+    zh_chars = _zh_char_count(translated)
+    leading_english_words = _leading_english_word_count(translated)
+    if english_words < 12:
+        return leading_english_words >= 12 and zh_chars > 0
+    if zh_chars == 0:
+        return True
+    if leading_english_words >= 12:
+        return True
+    return english_words >= max(12, zh_chars // 2)
 
 
 def looks_like_short_fragment(text: str) -> bool:
@@ -301,7 +521,7 @@ def should_force_translate_body_text(item: dict) -> bool:
 def should_reject_keep_origin(item: dict, decision: str, payload: dict[str, str] | None = None) -> bool:
     if decision != KEEP_ORIGIN_LABEL:
         return False
-    if payload and is_internal_placeholder_degraded(payload):
+    if payload and is_internal_keep_origin_degraded(payload):
         return False
     block_type = item.get("block_type")
     if block_type not in {"", None, "text"}:
@@ -315,13 +535,16 @@ def canonicalize_batch_result(batch: list[dict], result: dict[str, dict[str, str
     for item_id, payload in result.items():
         item = batch_items.get(item_id)
         decision = normalize_decision(str(payload.get("decision", "translate") or "translate"))
-        translated_text = str(payload.get("translated_text", "") or "").strip()
+        translated_text = unwrap_translation_shell(str(payload.get("translated_text", "") or "").strip(), item_id=item_id)
         if item is not None:
             source_text = unit_source_text(item).strip()
             if decision != KEEP_ORIGIN_LABEL and translated_text:
+                translated_text = _strip_translation_meta_preamble(translated_text)
                 repaired_text = repair_safe_duplicate_placeholders(source_text, translated_text)
                 if repaired_text is not None:
                     translated_text = repaired_text
+                translated_text = _collapse_adjacent_duplicate_spans(translated_text)
+                translated_text = _collapse_adjacent_duplicate_clauses(translated_text)
             if (
                 decision != KEEP_ORIGIN_LABEL
                 and translated_text
@@ -331,7 +554,21 @@ def canonicalize_batch_result(batch: list[dict], result: dict[str, dict[str, str
                 decision = KEEP_ORIGIN_LABEL
                 translated_text = ""
         canonical[item_id] = result_entry(decision, translated_text)
+        if isinstance(payload, dict) and payload.get("final_status"):
+            canonical[item_id]["final_status"] = str(payload.get("final_status", "") or canonical[item_id]["final_status"])
     return canonical
+
+
+def looks_like_protocol_shell_output(translated_text: str) -> bool:
+    text = str(translated_text or "").strip()
+    if not text or not text.startswith("{"):
+        return False
+    return (
+        '"translated_text"' in text
+        or '"translations"' in text
+        or "“translated_text”" in text
+        or "“translations”" in text
+    )
 
 
 def validate_batch_result(
@@ -366,6 +603,47 @@ def validate_batch_result(
             raise SuspiciousKeepOriginError(item_id, result)
         if decision == KEEP_ORIGIN_LABEL:
             continue
+        if not translated_text.strip():
+            if diagnostics is not None:
+                diagnostics.emit(
+                    kind="empty_translation",
+                    item_id=item_id,
+                    page_idx=item.get("page_idx"),
+                    severity="error",
+                    message="Empty translation output",
+                    retryable=True,
+                )
+            raise EmptyTranslationError(item_id)
+        if looks_like_protocol_shell_output(translated_text):
+            if diagnostics is not None:
+                diagnostics.emit(
+                    kind="protocol_shell_output",
+                    item_id=item_id,
+                    page_idx=item.get("page_idx"),
+                    severity="error",
+                    message="Translated output still contains JSON/protocol shell",
+                    retryable=True,
+                )
+            raise TranslationProtocolError(
+                item_id,
+                source_text=source_text,
+                translated_text=translated_text,
+            )
+        if looks_like_untranslated_english_output(item, translated_text):
+            if diagnostics is not None:
+                diagnostics.emit(
+                    kind="english_residue",
+                    item_id=item_id,
+                    page_idx=item.get("page_idx"),
+                    severity="error",
+                    message="Translated output still looks predominantly English",
+                    retryable=True,
+                )
+            raise EnglishResidueError(
+                item_id,
+                source_text=source_text,
+                translated_text=translated_text,
+            )
         source_placeholders = placeholders(source_text)
         translated_placeholders = placeholders(translated_text)
         if not translated_placeholders.issubset(source_placeholders):
@@ -408,6 +686,19 @@ def validate_batch_result(
                 translated_sequence,
                 source_text=source_text,
                 translated_text=translated_text,
+            )
+        if translated_sequence != source_sequence and diagnostics is not None:
+            diagnostics.emit(
+                kind="placeholder_order_changed",
+                item_id=item_id,
+                page_idx=item.get("page_idx"),
+                severity="warning",
+                message="Protected token order changed but inventory is preserved",
+                retryable=False,
+                details={
+                    "source_sequence": source_sequence,
+                    "translated_sequence": translated_sequence,
+                },
             )
         if translated_text.strip() == source_text.strip():
             if looks_like_url_fragment(source_text):
