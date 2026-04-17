@@ -22,6 +22,19 @@ EN_WORD_RE = re.compile(r"[A-Za-z]+(?:[-'][A-Za-z]+)?")
 KEEP_ORIGIN_LABEL = "keep_origin"
 INTERNAL_PLACEHOLDER_DEGRADED_REASON = "placeholder_unstable"
 SHORT_FRAGMENT_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._/-]{0,7}$")
+CLAUSE_SPLIT_RE = re.compile(r"[^。！？；.!?;\n]+[。！？；.!?;\n]?")
+META_TRANSLATION_PHRASES = (
+    "translating ocr text",
+    "i need to translate",
+    "should i translate",
+    "it's best to translate",
+    "i'll aim to",
+    "i will aim to",
+    "the source repeats due to ocr",
+    "likely with repeated clauses",
+)
+ADJACENT_DUPLICATE_MIN_CHARS = 12
+ADJACENT_DUPLICATE_MAX_CHARS = 120
 
 
 class SuspiciousKeepOriginError(ValueError):
@@ -124,6 +137,10 @@ def internal_keep_origin_result(reason: str) -> dict[str, str]:
     result = result_entry(KEEP_ORIGIN_LABEL, "")
     result["_internal_reason"] = reason
     return result
+
+
+def is_internal_keep_origin_degraded(payload: dict[str, str]) -> bool:
+    return bool(str(payload.get("_internal_reason", "") or "").strip())
 
 
 def is_internal_placeholder_degraded(payload: dict[str, str]) -> bool:
@@ -329,6 +346,113 @@ def _zh_char_count(text: str) -> int:
     return sum(1 for ch in strip_placeholders(text) if "\u4e00" <= ch <= "\u9fff")
 
 
+def _strip_translation_meta_preamble(text: str) -> str:
+    translated = str(text or "").strip()
+    if not translated:
+        return translated
+    first_zh_index = next((idx for idx, ch in enumerate(translated) if "\u4e00" <= ch <= "\u9fff"), -1)
+    if first_zh_index <= 0:
+        return translated
+    prefix = normalize_inline_whitespace(translated[:first_zh_index]).lower()
+    if not prefix:
+        return translated
+    if not any(phrase in prefix for phrase in META_TRANSLATION_PHRASES):
+        return translated
+    stripped = translated[first_zh_index:].lstrip()
+    return stripped or translated
+
+
+def _collapse_adjacent_duplicate_clauses(text: str) -> str:
+    translated = str(text or "").strip()
+    if not translated:
+        return translated
+    clauses = [clause for clause in CLAUSE_SPLIT_RE.findall(translated) if clause.strip()]
+    if len(clauses) < 2:
+        return translated
+
+    collapsed = list(clauses)
+    changed = True
+    while changed:
+        changed = False
+        next_clauses: list[str] = []
+        index = 0
+        while index < len(collapsed):
+            current = collapsed[index]
+            current_key = normalize_inline_whitespace(current)
+            if (
+                index + 1 < len(collapsed)
+                and len(strip_placeholders(current_key)) >= 12
+                and current_key
+                and current_key == normalize_inline_whitespace(collapsed[index + 1])
+            ):
+                next_clauses.append(current)
+                index += 2
+                changed = True
+                continue
+            next_clauses.append(current)
+            index += 1
+        collapsed = next_clauses
+    if len(collapsed) == len(clauses):
+        return translated
+    return "".join(collapsed).strip()
+
+
+def _collapse_adjacent_duplicate_spans(text: str) -> str:
+    translated = str(text or "").strip()
+    if not translated:
+        return translated
+    collapsed = translated
+    changed = True
+    while changed:
+        changed = False
+        index = 0
+        pieces: list[str] = []
+        while index < len(collapsed):
+            matched = False
+            max_window = min(ADJACENT_DUPLICATE_MAX_CHARS, (len(collapsed) - index) // 2)
+            for window in range(max_window, ADJACENT_DUPLICATE_MIN_CHARS - 1, -1):
+                left = collapsed[index : index + window]
+                if not left.strip():
+                    continue
+                join = index + window
+                while join < len(collapsed) and collapsed[join].isspace():
+                    join += 1
+                right = collapsed[join : join + window]
+                if normalize_inline_whitespace(left) != normalize_inline_whitespace(right):
+                    continue
+                pieces.append(left)
+                index = join + window
+                changed = True
+                matched = True
+                break
+            if matched:
+                continue
+            pieces.append(collapsed[index])
+            index += 1
+        collapsed = "".join(pieces)
+    return collapsed.strip()
+
+
+def _leading_english_word_count(text: str) -> int:
+    cleaned = strip_placeholders(text or "")
+    if not cleaned.strip():
+        return 0
+    count = 0
+    for token in re.findall(r"[A-Za-z]+(?:[-'][A-Za-z]+)?|[\u4e00-\u9fff]+|[^\s]", cleaned):
+        if re.fullmatch(r"[\u4e00-\u9fff]+", token):
+            break
+        if EN_WORD_RE.fullmatch(token):
+            count += 1
+            continue
+        if token.isspace():
+            continue
+        if token in {'"', "'", "(", ")", "[", "]", "{", "}", ",", ".", ";", ":", "!", "?", "-", "/"}:
+            continue
+        if count > 0:
+            break
+    return count
+
+
 def looks_like_untranslated_english_output(item: dict, translated_text: str) -> bool:
     source_text = unit_source_text(item).strip()
     translated = str(translated_text or "").strip()
@@ -340,9 +464,12 @@ def looks_like_untranslated_english_output(item: dict, translated_text: str) -> 
         return False
     english_words = _english_word_count(translated)
     zh_chars = _zh_char_count(translated)
+    leading_english_words = _leading_english_word_count(translated)
     if english_words < 12:
-        return False
+        return leading_english_words >= 12 and zh_chars > 0
     if zh_chars == 0:
+        return True
+    if leading_english_words >= 12:
         return True
     return english_words >= max(12, zh_chars // 2)
 
@@ -394,7 +521,7 @@ def should_force_translate_body_text(item: dict) -> bool:
 def should_reject_keep_origin(item: dict, decision: str, payload: dict[str, str] | None = None) -> bool:
     if decision != KEEP_ORIGIN_LABEL:
         return False
-    if payload and is_internal_placeholder_degraded(payload):
+    if payload and is_internal_keep_origin_degraded(payload):
         return False
     block_type = item.get("block_type")
     if block_type not in {"", None, "text"}:
@@ -412,9 +539,12 @@ def canonicalize_batch_result(batch: list[dict], result: dict[str, dict[str, str
         if item is not None:
             source_text = unit_source_text(item).strip()
             if decision != KEEP_ORIGIN_LABEL and translated_text:
+                translated_text = _strip_translation_meta_preamble(translated_text)
                 repaired_text = repair_safe_duplicate_placeholders(source_text, translated_text)
                 if repaired_text is not None:
                     translated_text = repaired_text
+                translated_text = _collapse_adjacent_duplicate_spans(translated_text)
+                translated_text = _collapse_adjacent_duplicate_clauses(translated_text)
             if (
                 decision != KEEP_ORIGIN_LABEL
                 and translated_text

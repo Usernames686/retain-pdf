@@ -19,6 +19,7 @@ from services.translation.llm.placeholder_guard import UnexpectedPlaceholderErro
 from services.translation.llm.placeholder_guard import canonicalize_batch_result
 from services.translation.llm.placeholder_guard import has_formula_placeholders
 from services.translation.llm.placeholder_guard import internal_keep_origin_result
+from services.translation.llm.placeholder_guard import is_internal_keep_origin_degraded
 from services.translation.llm.placeholder_guard import is_internal_placeholder_degraded
 from services.translation.llm.placeholder_guard import item_with_runtime_hard_glossary
 from services.translation.llm.placeholder_guard import item_with_placeholder_aliases
@@ -40,6 +41,7 @@ from services.translation.llm.translation_client import translate_batch_once
 from services.translation.llm.translation_client import translate_single_item_plain_text
 from services.translation.llm.translation_client import translate_single_item_plain_text_unstructured
 from services.translation.llm.translation_client import translate_single_item_tagged_text
+from services.translation.llm.translation_client import translate_single_item_with_decision
 
 
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?;:])\s+")
@@ -50,6 +52,8 @@ HEAVY_FORMULA_SPLIT_SEGMENTS = 16
 HEAVY_FORMULA_SPLIT_WINDOWS = 3
 HEAVY_FORMULA_CHUNK_PLACEHOLDERS = 8
 HEAVY_FORMULA_CHUNK_CHARS = 900
+OCR_DUPLICATE_WINDOW_MAX_WORDS = 12
+OCR_DUPLICATE_MIN_COLLAPSE_WORDS = 8
 
 
 def _formula_density(source_text: str, placeholder_count: int) -> float:
@@ -97,6 +101,52 @@ def _chunk_source_text_fallback(source_text: str, *, words_per_chunk: int = 48) 
     if len(words) <= words_per_chunk:
         return [str(source_text or "").strip()] if str(source_text or "").strip() else []
     return [" ".join(words[i : i + words_per_chunk]).strip() for i in range(0, len(words), words_per_chunk)]
+
+
+def _collapse_adjacent_duplicate_word_runs(source_text: str) -> str:
+    words = WORD_SPLIT_RE.findall(source_text or "")
+    if len(words) < OCR_DUPLICATE_MIN_COLLAPSE_WORDS * 2:
+        return str(source_text or "").strip()
+
+    collapsed = list(words)
+    changed = True
+    while changed:
+        changed = False
+        index = 0
+        next_words: list[str] = []
+        while index < len(collapsed):
+            matched = False
+            max_window = min(OCR_DUPLICATE_WINDOW_MAX_WORDS, (len(collapsed) - index) // 2)
+            for window in range(max_window, 1, -1):
+                left = collapsed[index : index + window]
+                right = collapsed[index + window : index + window * 2]
+                if len(left) < OCR_DUPLICATE_MIN_COLLAPSE_WORDS:
+                    continue
+                if left == right:
+                    next_words.extend(left)
+                    index += window * 2
+                    changed = True
+                    matched = True
+                    break
+            if matched:
+                continue
+            next_words.append(collapsed[index])
+            index += 1
+        collapsed = next_words
+    return " ".join(collapsed).strip()
+
+
+def _normalized_ocr_duplicate_source_text(source_text: str) -> str:
+    normalized = _collapse_adjacent_duplicate_word_runs(source_text)
+    if not normalized:
+        return str(source_text or "").strip()
+    source_words = WORD_SPLIT_RE.findall(source_text or "")
+    normalized_words = WORD_SPLIT_RE.findall(normalized)
+    if len(normalized_words) >= len(source_words):
+        return str(source_text or "").strip()
+    if len(source_words) - len(normalized_words) < OCR_DUPLICATE_MIN_COLLAPSE_WORDS:
+        return str(source_text or "").strip()
+    return normalized
 
 
 def _restore_runtime_term_tokens(
@@ -305,6 +355,50 @@ def _keep_origin_payload_for_repeated_empty_translation(item: dict) -> dict[str,
     return {str(item.get("item_id", "") or ""): payload}
 
 
+def _keep_origin_payload_for_repeated_validation_failure(
+    item: dict,
+    *,
+    code: str,
+    reason: str,
+    context: TranslationControlContext | None = None,
+) -> dict[str, dict[str, str]]:
+    payload = internal_keep_origin_result(reason)
+    payload["error_taxonomy"] = "validation"
+    payload["translation_diagnostics"] = {
+        "item_id": item.get("item_id", ""),
+        "page_idx": item.get("page_idx"),
+        "route_path": ["block_level", "keep_origin"],
+        "error_trace": [{"type": "validation", "code": code}],
+        "fallback_to": "keep_origin",
+        "degradation_reason": reason,
+        "final_status": "kept_origin",
+        **_formula_route_diagnostics(item, context=context),
+    }
+    return {str(item.get("item_id", "") or ""): payload}
+
+
+def _keep_origin_payload_for_item_failure(
+    item: dict,
+    *,
+    exc: Exception,
+    context: TranslationControlContext | None = None,
+) -> dict[str, dict[str, str]]:
+    reason = "single_item_validation_failed"
+    payload = internal_keep_origin_result(reason)
+    payload["error_taxonomy"] = "validation"
+    payload["translation_diagnostics"] = {
+        "item_id": item.get("item_id", ""),
+        "page_idx": item.get("page_idx"),
+        "route_path": ["block_level", "keep_origin"],
+        "error_trace": [{"type": "validation", "code": type(exc).__name__}],
+        "fallback_to": "keep_origin",
+        "degradation_reason": reason,
+        "final_status": "kept_origin",
+        **_formula_route_diagnostics(item, context=context),
+    }
+    return {str(item.get("item_id", "") or ""): payload}
+
+
 def _sentence_level_fallback(
     item: dict,
     *,
@@ -316,9 +410,13 @@ def _sentence_level_fallback(
     diagnostics: TranslationDiagnosticsCollector | None,
 ) -> dict[str, dict[str, str]]:
     source_text = str(item.get("translation_unit_protected_source_text") or item.get("protected_source_text") or "")
+    normalized_source_text = _normalized_ocr_duplicate_source_text(source_text)
+    sentence_source_text = normalized_source_text or source_text
     sentences = [part.strip() for part in SENTENCE_SPLIT_RE.split(source_text) if part.strip()]
+    if sentence_source_text != source_text:
+        sentences = [part.strip() for part in SENTENCE_SPLIT_RE.split(sentence_source_text) if part.strip()]
     if len(sentences) <= 1:
-        sentences = _chunk_source_text_fallback(source_text)
+        sentences = _chunk_source_text_fallback(sentence_source_text)
     if len(sentences) <= 1:
         raise EmptyTranslationError(str(item.get("item_id", "") or ""))
     translated_parts: list[str] = []
@@ -413,10 +511,14 @@ def _sentence_level_fallback(
             "received": len(translated_indexes),
             "missing_ids": [str(index + 1) for index in failed_indexes],
         },
+        "ocr_duplicate_collapsed": sentence_source_text != source_text,
         "latency_ms": 0,
         **_formula_route_diagnostics(item, context=context),
     }
-    return {item["item_id"]: payload}
+    result = {item["item_id"]: payload}
+    result = canonicalize_batch_result([item], result)
+    validate_batch_result([item], result, diagnostics=diagnostics)
+    return result
 
 
 def translate_single_item_stable_placeholder_text(
@@ -617,7 +719,13 @@ def translate_single_item_plain_text_with_retries(
                 elapsed = time.perf_counter() - started
                 print(f"{request_label}: plain-text ok in {elapsed:.2f}s", flush=True)
             return result
-        except (UnexpectedPlaceholderError, PlaceholderInventoryError, EmptyTranslationError, EnglishResidueError) as exc:
+        except (
+            UnexpectedPlaceholderError,
+            PlaceholderInventoryError,
+            EmptyTranslationError,
+            EnglishResidueError,
+            SuspiciousKeepOriginError,
+        ) as exc:
             last_error = exc
             elapsed = time.perf_counter() - started
             if request_label:
@@ -655,7 +763,53 @@ def translate_single_item_plain_text_with_retries(
                                 f"{request_label}: tagged single-item failed attempt {attempt}/{context.fallback_policy.plain_text_attempts} after {tagged_elapsed:.2f}s: {type(tagged_exc).__name__}: {tagged_exc}",
                                 flush=True,
                         )
-            if attempt >= context.fallback_policy.plain_text_attempts and isinstance(last_error, (EmptyTranslationError, EnglishResidueError)):
+            if attempt >= context.fallback_policy.plain_text_attempts and isinstance(
+                last_error,
+                (EnglishResidueError, SuspiciousKeepOriginError),
+            ):
+                structured_started = time.perf_counter()
+                try:
+                    if request_label:
+                        print(
+                            f"{request_label}: retrying with structured single-item fallback after English residue",
+                            flush=True,
+                        )
+                    result = translate_single_item_with_decision(
+                        item,
+                        api_key=api_key,
+                        model=model,
+                        base_url=base_url,
+                        request_label=f"{request_label} structured" if request_label else "",
+                        domain_guidance=context.merged_guidance,
+                        mode=context.mode,
+                        diagnostics=diagnostics,
+                        timeout_s=context.timeout_policy.plain_text_seconds,
+                    )
+                    if request_label:
+                        structured_elapsed = time.perf_counter() - structured_started
+                        print(
+                            f"{request_label}: structured single-item ok in {structured_elapsed:.2f}s",
+                            flush=True,
+                        )
+                    return _attach_result_metadata(
+                        _restore_runtime_term_tokens(result, item=item),
+                        item=item,
+                        context=context,
+                        route_path=["block_level", "single_decision"],
+                        output_mode_path=["json_schema"],
+                    )
+                except (ValueError, KeyError, json.JSONDecodeError) as structured_exc:
+                    last_error = structured_exc
+                    if request_label:
+                        structured_elapsed = time.perf_counter() - structured_started
+                        print(
+                            f"{request_label}: structured single-item failed after {structured_elapsed:.2f}s: {type(structured_exc).__name__}: {structured_exc}",
+                            flush=True,
+                        )
+            if attempt >= context.fallback_policy.plain_text_attempts and isinstance(
+                last_error,
+                (ValueError, KeyError, json.JSONDecodeError),
+            ):
                 raw_started = time.perf_counter()
                 try:
                     if request_label:
@@ -729,6 +883,34 @@ def translate_single_item_plain_text_with_retries(
                             flush=True,
                         )
                     return _keep_origin_payload_for_repeated_empty_translation(item)
+                if context.fallback_policy.allow_keep_origin_degradation and isinstance(
+                    last_error,
+                    (EnglishResidueError, SuspiciousKeepOriginError),
+                ):
+                    code = "ENGLISH_RESIDUE" if isinstance(last_error, EnglishResidueError) else "SUSPICIOUS_KEEP_ORIGIN"
+                    reason = "english_residue_repeated" if isinstance(last_error, EnglishResidueError) else "suspicious_keep_origin_repeated"
+                    if diagnostics is not None:
+                        diagnostics.emit(
+                            kind="validation_degraded",
+                            item_id=str(item.get("item_id", "") or ""),
+                            page_idx=item.get("page_idx"),
+                            severity="warning",
+                            message=f"Degraded to keep_origin after repeated {code.lower()} validation failure",
+                            retryable=True,
+                            details={"reason": reason, "code": code},
+                        )
+                    if request_label:
+                        print(
+                            f"{request_label}: degraded to keep_origin after repeated {code.lower()} validation failure",
+                            flush=True,
+                        )
+                        log_placeholder_failure(request_label, item, last_error, diagnostics=diagnostics)
+                    return _keep_origin_payload_for_repeated_validation_failure(
+                        item,
+                        code=code,
+                        reason=reason,
+                        context=context,
+                    )
                 if has_formula_placeholders(item) and context.fallback_policy.allow_keep_origin_degradation:
                     if diagnostics is not None:
                         diagnostics.emit(
@@ -756,14 +938,6 @@ def translate_single_item_plain_text_with_retries(
                     }
                     return {item["item_id"]: payload}
                 raise last_error
-            time.sleep(min(8, 2 * attempt))
-        except SuspiciousKeepOriginError as exc:
-            last_error = exc
-            if request_label:
-                elapsed = time.perf_counter() - started
-                print(f"{request_label}: unexpected keep_origin after {elapsed:.2f}s: {type(exc).__name__}: {exc}", flush=True)
-            if attempt >= context.fallback_policy.plain_text_attempts:
-                raise
             time.sleep(min(8, 2 * attempt))
         except (ValueError, KeyError, json.JSONDecodeError) as exc:
             last_error = exc
@@ -872,17 +1046,38 @@ def translate_items_plain_text(
     total_items = len(uncached_batch)
     for index, item in enumerate(uncached_batch, start=1):
         item_label = f"{request_label} item {index}/{total_items} {item['item_id']}" if request_label else ""
-        result = translate_single_item_plain_text_with_retries(
-            item,
-            api_key=api_key,
-            model=model,
-            base_url=base_url,
-            request_label=item_label,
-            context=context,
-            diagnostics=diagnostics,
-        )
+        try:
+            result = translate_single_item_plain_text_with_retries(
+                item,
+                api_key=api_key,
+                model=model,
+                base_url=base_url,
+                request_label=item_label,
+                context=context,
+                diagnostics=diagnostics,
+            )
+        except ValueError as exc:
+            if not context.fallback_policy.allow_keep_origin_degradation:
+                raise
+            if diagnostics is not None:
+                diagnostics.emit(
+                    kind="single_item_degraded",
+                    item_id=str(item.get("item_id", "") or ""),
+                    page_idx=item.get("page_idx"),
+                    severity="warning",
+                    message=f"Degraded to keep_origin after single-item validation failure: {type(exc).__name__}",
+                    retryable=True,
+                    details={"error_type": type(exc).__name__},
+                )
+            if item_label:
+                print(
+                    f"{item_label}: degraded to keep_origin after uncaught single-item validation failure: {type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+                log_placeholder_failure(item_label, item, exc, diagnostics=diagnostics)
+            result = _keep_origin_payload_for_item_failure(item, exc=exc, context=context)
         payload = result.get(item["item_id"], {})
-        if not is_internal_placeholder_degraded(payload):
+        if not is_internal_keep_origin_degraded(payload):
             store_cached_batch(
                 [item],
                 result,

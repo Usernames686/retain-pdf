@@ -14,6 +14,7 @@ from services.rendering.background.stage import build_clean_background_pdf
 from services.rendering.core.models import RenderLayoutBlock
 from services.rendering.core.models import RenderPageSpec
 from services.rendering.layout.render_model import build_render_page_specs
+from services.rendering.redaction.redaction_routes import apply_standard_redaction
 from services.rendering.typst.book_ops import _compile_render_pages_pdf_resilient
 from services.rendering.typst.emitter import build_typst_source_from_page_specs
 
@@ -91,6 +92,34 @@ def test_background_stage_creates_cleaned_pdf() -> None:
 
         assert result == output_pdf
         assert output_pdf.exists()
+
+
+def test_standard_redaction_fills_removable_text_regions() -> None:
+    page = mock.Mock()
+    rect = fitz.Rect(10, 20, 80, 60)
+    page.add_redact_annot = mock.Mock()
+    page.apply_redactions = mock.Mock()
+
+    with mock.patch(
+        "services.rendering.redaction.redaction_routes.collect_page_drawing_rects",
+        return_value=[],
+    ), mock.patch(
+        "services.rendering.redaction.redaction_routes.page_should_use_cover_only",
+        return_value=False,
+    ), mock.patch(
+        "services.rendering.redaction.redaction_routes.item_has_removable_text",
+        return_value=True,
+    ), mock.patch(
+        "services.rendering.redaction.redaction_routes.resolved_fill_color",
+        return_value=(0.9, 0.9, 0.9),
+    ):
+        apply_standard_redaction(
+            page,
+            [(rect, {"item_id": "b1", "source_text": "source text"}, "译文")],
+        )
+
+    page.add_redact_annot.assert_called_once_with(rect, fill=(0.9, 0.9, 0.9))
+    page.apply_redactions.assert_called_once()
 
 
 def test_build_render_page_specs_uses_layout_block_protocol() -> None:
