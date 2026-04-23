@@ -126,6 +126,12 @@
 - 超过 30 天后自动清理：
 
 ---
+原文件<img width="740" height="827" alt="716254b4f1a2fc95e120d87878677714" src="https://github.com/user-attachments/assets/21a51894-e0d6-4519-a2ac-175c9f45c7d0" />
+第一次更改和原作者项目遇到这种扫描件，字体部分是矢量图形，SVG元素效果：<img width="1122" height="1149" alt="fbbc21f9113a208f679306dfe706c8d6" src="https://github.com/user-attachments/assets/be271016-9b82-4247-9158-fa3de4b76f5b" />
+本次效果：<img width="811" height="859" alt="4661f7763602540e91dd6a69dcb3c46d" src="https://github.com/user-attachments/assets/14fc0ddf-1f6f-4167-894e-bbab967076fd" />
+
+
+
 
 ## 补充文档入口
 
