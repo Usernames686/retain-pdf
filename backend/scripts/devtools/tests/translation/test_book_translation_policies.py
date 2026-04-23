@@ -8,6 +8,8 @@ sys.path.insert(0, str(REPO_SCRIPTS_ROOT))
 
 
 from runtime.pipeline.book_translation_policies import finalize_page_payloads
+from services.translation.policy.config import build_translation_policy_config
+from services.translation.policy.config import should_skip_title_translation
 
 
 def _page_payload_item(
@@ -96,3 +98,25 @@ def test_finalize_page_payloads_annotates_layout_before_cross_page_provider_join
     assert page_payloads[0][0]["continuation_decision"] == "provider_joined"
     assert page_payloads[1][0]["continuation_decision"] == "provider_joined"
     assert page_payloads[0][0]["continuation_group"] == group_id
+
+
+def test_title_translation_is_enabled_by_default() -> None:
+    assert should_skip_title_translation("sci", False) is False
+
+    config = build_translation_policy_config(
+        mode="sci",
+        skip_title_translation=False,
+    )
+
+    assert config.enable_title_skip is False
+
+
+def test_title_translation_can_still_be_explicitly_skipped() -> None:
+    assert should_skip_title_translation("sci", True) is True
+
+    config = build_translation_policy_config(
+        mode="sci",
+        skip_title_translation=True,
+    )
+
+    assert config.enable_title_skip is True

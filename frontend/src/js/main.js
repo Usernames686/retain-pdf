@@ -1,4 +1,4 @@
-import { $ } from "./dom.js";
+import { $ } from "./dom.js?v=20260413fix5";
 import {
   apiBase,
   applyKeyInputs,
@@ -12,7 +12,7 @@ import {
   loadDeveloperStoredConfig,
   saveDeveloperStoredConfig,
   saveBrowserStoredConfig,
-} from "./config.js";
+} from "./config.js?v=20260413fix5";
 import {
   API_PREFIX,
   DEFAULT_BATCH_SIZE,
@@ -27,19 +27,19 @@ import {
   DEFAULT_TIMEOUT_SECONDS,
   DEFAULT_WORKERS,
   FRONT_MAX_BYTES,
-} from "./constants.js";
+} from "./constants.js?v=20260413fix5";
 import {
   bootstrapDesktop,
   openSettingsDialog,
   openSetupDialog,
   saveDesktopConfig,
   setDesktopBusy,
-} from "./desktop.js";
+} from "./desktop.js?v=20260413fix5";
 import {
   isTerminalStatus,
   normalizeJobPayload,
   summarizeStatus,
-} from "./job.js";
+} from "./job.js?v=20260413fix5";
 import {
   fetchJobEvents,
   fetchJobArtifactsManifest,
@@ -49,8 +49,8 @@ import {
   submitJson,
   submitUploadRequest,
   validateMineruToken,
-} from "./network.js";
-import { state } from "./state.js";
+} from "./network.js?v=20260413fix5";
+import { state } from "./state.js?v=20260413fix5";
 import {
   clearFileInputValue,
   prepareFilePicker,
@@ -63,7 +63,7 @@ import {
   setUploadProgress,
   updateActionButtons,
   updateJobWarning,
-} from "./ui.js";
+} from "./ui.js?v=20260413fix5";
 
 const DEVELOPER_PASSWORD = "Gk265157!";
 const DEVELOPER_AUTH_SESSION_KEY = "retainpdf.developer.auth.v1";
@@ -94,6 +94,18 @@ function setDeepSeekValidationMessage(message, tone = "") {
   }
   const content = `${message || ""}`.trim();
   el.textContent = content || "可检测 DeepSeek 接口是否连通。";
+  el.classList.toggle("hidden", !content);
+  el.classList.toggle("is-valid", tone === "valid");
+  el.classList.toggle("is-error", tone === "error");
+}
+
+function setModelValidationMessage(message, tone = "") {
+  const el = $("browser-deepseek-validation");
+  if (!el) {
+    return;
+  }
+  const content = `${message || ""}`.trim();
+  el.textContent = content || "Model API validation status will appear here.";
   el.classList.toggle("hidden", !content);
   el.classList.toggle("is-valid", tone === "valid");
   el.classList.toggle("is-error", tone === "error");
@@ -201,6 +213,63 @@ async function runDeepSeekConnectivityCheck(apiKey, { showResult = true } = {}) 
   } catch (_err) {
     if (showResult) {
       setDeepSeekValidationMessage("DeepSeek 接口检测失败，请检查网络或浏览器跨域限制。", "error");
+    }
+    return { ok: false, status: 0 };
+  }
+}
+
+async function runModelConnectivityCheck(apiKey, { baseUrl = "", showResult = true } = {}) {
+  const modelApiKey = `${apiKey || ""}`.trim();
+  if (!modelApiKey) {
+    if (showResult) {
+      setModelValidationMessage("Please enter a model API key first.", "error");
+    }
+    return { ok: false, status: 0 };
+  }
+
+  const resolvedBaseUrl = `${baseUrl || developerConfigWithDefaults().baseUrl || defaultModelBaseUrl()}`
+    .trim()
+    .replace(/\/$/, "");
+  if (!resolvedBaseUrl) {
+    if (showResult) {
+      setModelValidationMessage("Please enter a model base URL first.", "error");
+    }
+    return { ok: false, status: 0 };
+  }
+
+  if (showResult) {
+    setModelValidationMessage("Checking model API connectivity...");
+  }
+
+  try {
+    const resp = await fetch(`${resolvedBaseUrl}/models`, {
+      headers: {
+        Authorization: `Bearer ${modelApiKey}`,
+      },
+    });
+    if (resp.ok) {
+      if (showResult) {
+        setModelValidationMessage("Model API is reachable.", "valid");
+      }
+      return { ok: true, status: resp.status };
+    }
+
+    const summary = resp.status === 401 || resp.status === 403
+      ? "The model API key was rejected."
+      : resp.status === 404 || resp.status === 405
+        ? "The endpoint responded, but /models is not supported. Translation may still work."
+        : `Model API returned ${resp.status}.`;
+    if (showResult) {
+      setModelValidationMessage(summary, resp.status === 404 || resp.status === 405 ? "valid" : "error");
+    }
+    return {
+      ok: resp.status === 404 || resp.status === 405,
+      status: resp.status,
+      summary,
+    };
+  } catch (_err) {
+    if (showResult) {
+      setModelValidationMessage("Model API validation failed. Check the base URL, network, or CORS policy.", "error");
     }
     return { ok: false, status: 0 };
   }
@@ -368,21 +437,10 @@ function showDeveloperSettingsDialog() {
 }
 
 function openDeveloperDialog() {
-  if (isDeveloperAuthorized()) {
-    showDeveloperSettingsDialog();
-    return;
+  if (!isDeveloperAuthorized()) {
+    markDeveloperAuthorized();
   }
-  const passwordInput = $("developer-auth-password");
-  const errorBox = $("developer-auth-error");
-  if (passwordInput) {
-    passwordInput.value = "";
-  }
-  if (errorBox) {
-    errorBox.textContent = "";
-    errorBox.classList.add("hidden");
-  }
-  $("developer-auth-dialog")?.showModal();
-  passwordInput?.focus();
+  showDeveloperSettingsDialog();
 }
 
 function submitDeveloperAuth() {
@@ -509,6 +567,11 @@ async function handleProtectedArtifactClick(event) {
     return;
   }
 
+  if (url.startsWith(`${window.location.origin}/api/`)) {
+    setText("error-box", "-");
+    return;
+  }
+
   event.preventDefault();
   setText("error-box", "-");
 
@@ -522,18 +585,24 @@ async function handleProtectedArtifactClick(event) {
     const blob = await resp.blob();
     const disposition = resp.headers.get("content-disposition") || "";
     const jobId = state.currentJobId || "result";
-    const fallbackName = link.id === "download-btn"
-      ? `${jobId}.zip`
-      : link.id === "markdown-bundle-btn"
-        ? `${jobId}-markdown.zip`
-      : link.id === "pdf-btn"
-        ? `${jobId}.pdf`
-        : link.id === "markdown-raw-btn"
-          ? `${jobId}.md`
-          : `${jobId}.json`;
+    const configuredFallbackName = (link.dataset.fallbackName || "").trim();
+    const fallbackName = configuredFallbackName
+      ? `${jobId}-${configuredFallbackName}`
+      : link.id === "download-btn"
+        ? `${jobId}.zip`
+        : link.id === "markdown-bundle-btn"
+          ? `${jobId}-markdown.zip`
+          : link.id === "pdf-btn"
+            ? `${jobId}.pdf`
+            : link.id === "markdown-raw-btn"
+              ? `${jobId}.md`
+              : `${jobId}.json`;
     downloadBlob(blob, fileNameFromDisposition(disposition, fallbackName));
   } catch (err) {
     setText("error-box", err.message);
+    if (url.startsWith(`${window.location.origin}/api/`)) {
+      window.open(url, "_blank", "noopener");
+    }
   }
 }
 
@@ -988,29 +1057,49 @@ function browserCredentialElements() {
     dialog: $("browser-credentials-dialog"),
     mineruInput: $("browser-mineru-token"),
     apiKeyInput: $("browser-api-key"),
+    baseUrlInput: $("browser-base-url"),
+    modelInput: $("browser-model"),
     trigger: $("credentials-btn"),
   };
 }
 
 function syncBrowserDialogFromHiddenInputs() {
-  const { mineruInput, apiKeyInput } = browserCredentialElements();
+  const { mineruInput, apiKeyInput, baseUrlInput, modelInput } = browserCredentialElements();
   if (mineruInput) {
     mineruInput.value = $("mineru_token").value || "";
   }
   if (apiKeyInput) {
     apiKeyInput.value = $("api_key").value || "";
   }
+  if (baseUrlInput) {
+    baseUrlInput.value = developerConfigWithDefaults().baseUrl;
+  }
+  if (modelInput) {
+    modelInput.value = developerConfigWithDefaults().model;
+  }
   setMineruValidationMessage("", "");
-  setDeepSeekValidationMessage("", "");
+  setModelValidationMessage("", "");
 }
 
 function persistBrowserCredentialsFromDialog() {
-  const { mineruInput, apiKeyInput } = browserCredentialElements();
-  applyKeyInputs(
-    mineruInput?.value?.trim() || "",
-    apiKeyInput?.value?.trim() || "",
-  );
-  saveBrowserStoredConfig();
+  const { mineruInput, apiKeyInput, baseUrlInput, modelInput } = browserCredentialElements();
+  const mineruToken = mineruInput?.value?.trim() || "";
+  const modelApiKey = apiKeyInput?.value?.trim() || "";
+  const baseUrl = baseUrlInput?.value?.trim() || defaultModelBaseUrl();
+  const model = modelInput?.value?.trim() || defaultModelName();
+  applyKeyInputs(mineruToken, modelApiKey);
+  state.developerConfig = {
+    ...state.developerConfig,
+    baseUrl,
+    model,
+  };
+  saveDeveloperStoredConfig(state.developerConfig);
+  saveBrowserStoredConfig({
+    mineruToken,
+    modelApiKey,
+    baseUrl,
+    model,
+  });
 }
 
 function hasBrowserCredentials() {
@@ -1058,10 +1147,13 @@ function openBrowserCredentialsDialog() {
 }
 
 async function handleBrowserCredentialValidate() {
-  const { mineruInput, apiKeyInput } = browserCredentialElements();
+  const { mineruInput, apiKeyInput, baseUrlInput } = browserCredentialElements();
   await Promise.all([
     runMineruTokenValidation(mineruInput?.value || "", { showResult: true }),
-    runDeepSeekConnectivityCheck(apiKeyInput?.value || "", { showResult: true }),
+    runModelConnectivityCheck(apiKeyInput?.value || "", {
+      baseUrl: baseUrlInput?.value || "",
+      showResult: true,
+    }),
   ]);
 }
 
@@ -1071,8 +1163,11 @@ async function handleBrowserMineruValidate() {
 }
 
 async function handleBrowserDeepSeekValidate() {
-  const { apiKeyInput } = browserCredentialElements();
-  await runDeepSeekConnectivityCheck(apiKeyInput?.value || "", { showResult: true });
+  const { apiKeyInput, baseUrlInput } = browserCredentialElements();
+  await runModelConnectivityCheck(apiKeyInput?.value || "", {
+    baseUrl: baseUrlInput?.value || "",
+    showResult: true,
+  });
 }
 
 async function handleBrowserCredentialSave() {
@@ -1099,7 +1194,12 @@ async function checkApiConnectivity() {
 
 function initializePage() {
   const browserStored = loadBrowserStoredConfig();
-  state.developerConfig = loadDeveloperStoredConfig();
+  const savedDeveloperConfig = loadDeveloperStoredConfig();
+  state.developerConfig = {
+    ...savedDeveloperConfig,
+    model: savedDeveloperConfig.model || browserStored.model || "",
+    baseUrl: savedDeveloperConfig.baseUrl || browserStored.baseUrl || "",
+  };
   applyKeyInputs(
     browserStored.mineruToken || defaultMineruToken(),
     browserStored.modelApiKey || defaultModelApiKey(),
@@ -1187,7 +1287,13 @@ function initializePage() {
     setMineruValidationMessage("", "");
   });
   $("browser-api-key")?.addEventListener("input", () => {
-    setDeepSeekValidationMessage("", "");
+    setModelValidationMessage("", "");
+  });
+  $("browser-base-url")?.addEventListener("input", () => {
+    setModelValidationMessage("", "");
+  });
+  $("browser-model")?.addEventListener("input", () => {
+    setModelValidationMessage("", "");
   });
   $("browser-mineru-validate-btn")?.addEventListener("click", handleBrowserMineruValidate);
   $("browser-deepseek-validate-btn")?.addEventListener("click", handleBrowserDeepSeekValidate);

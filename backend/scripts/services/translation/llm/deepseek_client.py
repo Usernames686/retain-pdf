@@ -232,11 +232,17 @@ def extract_json_text(content: str) -> str:
             lines = lines[:-1]
         text = "\n".join(lines).strip()
     text = _normalize_loose_json_text(text)
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1 or end < start:
-        raise ValueError("Model response does not contain a JSON object.")
-    return text[start : end + 1]
+    decoder = json.JSONDecoder()
+    for start, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            payload, end = decoder.raw_decode(text[start:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return text[start : start + end]
+    raise ValueError("Model response does not contain a JSON object.")
 
 
 def extract_single_item_translation_text(content: str, item_id: str) -> str:
@@ -328,6 +334,10 @@ def chat_completions_url(base_url: str) -> str:
     return f"{normalize_base_url(base_url)}/chat/completions"
 
 
+def responses_url(base_url: str) -> str:
+    return f"{normalize_base_url(base_url)}/responses"
+
+
 def build_headers(api_key: str) -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
     if api_key.strip():
@@ -376,6 +386,132 @@ def _request_meta_summary(
         f"model={model} messages={len(messages)} message_chars={_message_chars(messages)} "
         f"body_bytes={_body_bytes(body)} stream={use_stream} response_format={response_format_type or 'none'}"
     )
+
+
+def _should_try_responses_api(*, model: str, base_url: str) -> bool:
+    normalized_model = (model or "").strip().lower()
+    normalized_base = normalize_base_url(base_url).lower()
+    if "api.deepseek.com" in normalized_base or normalized_model.startswith("deepseek"):
+        return False
+    return normalized_model.startswith("gpt-5")
+
+
+def _messages_to_responses_input(messages: list[dict[str, str]]) -> list[dict[str, Any]]:
+    converted: list[dict[str, Any]] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role", "user") or "user").strip() or "user"
+        content = str(message.get("content", "") or "")
+        converted.append(
+            {
+                "role": role,
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": content,
+                    }
+                ],
+            }
+        )
+    return converted
+
+
+def _request_responses_content(
+    *,
+    messages: list[dict[str, str]],
+    api_key: str,
+    model: str,
+    base_url: str,
+    temperature: float,
+    timeout: int,
+    request_label: str,
+) -> str:
+    body: dict[str, Any] = {
+        "model": model,
+        "input": _messages_to_responses_input(messages),
+        "text": {
+            "format": {
+                "type": "text",
+            }
+        },
+    }
+    if temperature is not None:
+        body["temperature"] = temperature
+
+    if request_label:
+        print(
+            f"{request_label}: fallback -> {model} {responses_url(base_url)} timeout={timeout}s",
+            flush=True,
+        )
+
+    response = get_session().post(
+        responses_url(base_url),
+        headers=build_headers(api_key),
+        json=body,
+        timeout=timeout,
+    )
+    _raise_for_status_with_context(
+        response,
+        model=model,
+        messages=messages,
+        body=body,
+        use_stream=False,
+    )
+    data: dict[str, Any] = response.json()
+    content = _extract_chat_response_text(data)
+    if content.strip():
+        return content
+    raise ValueError(
+        "Responses API fallback did not contain any usable text. "
+        f"response_body={_response_text_excerpt(response)}"
+    )
+
+
+def _request_streaming_chat_content(
+    *,
+    messages: list[dict[str, str]],
+    api_key: str,
+    model: str,
+    base_url: str,
+    temperature: float,
+    timeout: int,
+    request_label: str,
+    response_format: dict[str, Any] | None = None,
+) -> str:
+    body: dict[str, Any] = {
+        "model": model,
+        "temperature": temperature,
+        "messages": messages,
+        "stream": True,
+    }
+    if response_format is not None:
+        body["response_format"] = response_format
+
+    if request_label:
+        print(
+            f"{request_label}: streaming fallback -> {model} {chat_completions_url(base_url)} timeout={timeout}s",
+            flush=True,
+        )
+
+    response = get_session().post(
+        chat_completions_url(base_url),
+        headers=build_headers(api_key),
+        json=body,
+        timeout=timeout,
+        stream=True,
+    )
+    _raise_for_status_with_context(
+        response,
+        model=model,
+        messages=messages,
+        body=body,
+        use_stream=True,
+    )
+    content = _read_streaming_chat_content(response)
+    if content.strip():
+        return content
+    raise ValueError("Streaming fallback did not contain any usable text.")
 
 
 def _raise_for_status_with_context(
@@ -524,40 +660,115 @@ def _retry_after_delay(exc: Exception, attempt: int) -> tuple[int, str]:
     return _retry_delay(attempt), "backoff"
 
 
-def _extract_stream_delta_text(data: dict[str, Any]) -> str:
+def _extract_text_from_content_value(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        chunks: list[str] = []
+        for item in value:
+            text = _extract_text_from_content_value(item)
+            if text:
+                chunks.append(text)
+        return "".join(chunks)
+    if isinstance(value, dict):
+        for key in ("text", "value", "content", "output_text"):
+            text = _extract_text_from_content_value(value.get(key))
+            if text:
+                return text
+        item_type = str(value.get("type", "") or "").strip().lower()
+        if item_type in {"text", "output_text", "input_text"}:
+            for key in ("text", "value"):
+                text = _extract_text_from_content_value(value.get(key))
+                if text:
+                    return text
+    return ""
+
+
+def _extract_chat_response_text(data: dict[str, Any]) -> str:
+    direct_text = _extract_text_from_content_value(data.get("output_text"))
+    if direct_text:
+        return direct_text
+
     choices = data.get("choices")
-    if not isinstance(choices, list):
+    if isinstance(choices, list):
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            for container_key in ("message", "delta"):
+                container = choice.get(container_key)
+                if not isinstance(container, dict):
+                    continue
+                for value_key in ("content", "reasoning_content"):
+                    text = _extract_text_from_content_value(container.get(value_key))
+                    if text:
+                        return text
+            text = _extract_text_from_content_value(choice.get("text"))
+            if text:
+                return text
+
+    output = data.get("output")
+    if isinstance(output, list):
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            text = _extract_text_from_content_value(item.get("content"))
+            if text:
+                return text
+            text = _extract_text_from_content_value(item.get("text"))
+            if text:
+                return text
+            for key in ("output_text", "value"):
+                text = _extract_text_from_content_value(item.get(key))
+                if text:
+                    return text
+    return ""
+
+
+def _extract_stream_delta_text(data: dict[str, Any]) -> str:
+    return _extract_chat_response_text(data)
+
+
+def _iter_sse_event_parts(response: requests.Response):
+    pending_parts: list[bytes] = []
+    for raw_line in response.iter_lines(decode_unicode=False):
+        if raw_line is None:
+            continue
+        line = raw_line.rstrip(b"\r")
+        if not line:
+            if pending_parts:
+                yield pending_parts
+                pending_parts = []
+            continue
+        if line.startswith(b"data:"):
+            pending_parts.append(line[5:].lstrip())
+        elif pending_parts:
+            pending_parts.append(line)
+    if pending_parts:
+        yield pending_parts
+
+
+def _decode_sse_event_payload(parts: list[bytes]) -> str:
+    if not parts:
         return ""
-    chunks: list[str] = []
-    for choice in choices:
-        if not isinstance(choice, dict):
-            continue
-        delta = choice.get("delta")
-        if isinstance(delta, dict):
-            content = delta.get("content")
-            if isinstance(content, str) and content:
-                chunks.append(content)
-            reasoning_content = delta.get("reasoning_content")
-            if isinstance(reasoning_content, str) and reasoning_content:
-                chunks.append(reasoning_content)
-            continue
-        message = choice.get("message")
-        if isinstance(message, dict):
-            content = message.get("content")
-            if isinstance(content, str) and content:
-                chunks.append(content)
-    return "".join(chunks)
+    candidates: list[bytes] = [b"\n".join(parts)]
+    joined_without_newlines = b"".join(parts)
+    if joined_without_newlines != candidates[0]:
+        candidates.append(joined_without_newlines)
+    last_error: Exception | None = None
+    for candidate in candidates:
+        try:
+            return candidate.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    return ""
 
 
 def _read_streaming_chat_content(response: requests.Response) -> str:
     chunks: list[str] = []
-    for raw_line in response.iter_lines(decode_unicode=True):
-        if raw_line is None:
-            continue
-        line = raw_line.strip()
-        if not line or not line.startswith("data:"):
-            continue
-        payload = line[5:].strip()
+    for parts in _iter_sse_event_parts(response):
+        payload = _decode_sse_event_payload(parts).strip()
         if not payload or payload == "[DONE]":
             continue
         data = json.loads(payload)
@@ -636,7 +847,52 @@ def request_chat_content(
                     raise ValueError("Stream response did not contain any content.")
             else:
                 data: dict[str, Any] = response.json()
-                content = data["choices"][0]["message"]["content"]
+                content = _extract_chat_response_text(data)
+                if not content.strip():
+                    if _should_try_responses_api(model=model, base_url=base_url):
+                        stream_fallback_error: Exception | None = None
+                        try:
+                            content = _request_streaming_chat_content(
+                                messages=messages,
+                                api_key=api_key,
+                                model=model,
+                                base_url=base_url,
+                                temperature=temperature,
+                                timeout=timeout,
+                                request_label=request_label,
+                                response_format=active_response_format,
+                            )
+                        except (requests.RequestException, ValueError, KeyError, json.JSONDecodeError) as stream_exc:
+                            stream_fallback_error = stream_exc
+                            if request_label:
+                                print(
+                                    f"{request_label}: streaming fallback failed: {type(stream_exc).__name__}: {stream_exc}",
+                                    flush=True,
+                                )
+                        if not content.strip():
+                            try:
+                                content = _request_responses_content(
+                                    messages=messages,
+                                    api_key=api_key,
+                                    model=model,
+                                    base_url=base_url,
+                                    temperature=temperature,
+                                    timeout=timeout,
+                                    request_label=request_label,
+                                )
+                            except Exception as responses_exc:
+                                if stream_fallback_error is not None:
+                                    raise ValueError(
+                                        "Model response did not contain any usable text after streaming and "
+                                        f"Responses API fallbacks. streaming_error={stream_fallback_error}; "
+                                        f"responses_error={responses_exc}"
+                                    ) from responses_exc
+                                raise
+                    else:
+                        raise ValueError(
+                            "Model response did not contain any usable text. "
+                            f"response_body={_response_text_excerpt(response)}"
+                        )
             if request_label:
                 elapsed = time.perf_counter() - started
                 print(f"{request_label}: http ok in {elapsed:.2f}s", flush=True)

@@ -480,6 +480,51 @@ class RetryingTranslatorFormulaWindowTests(unittest.TestCase):
         self.assertEqual(calls[-1], "raw")
         self.assertEqual(result[item["item_id"]]["translated_text"], "这段英文正文已经通过原始纯文本回退成功翻译。")
 
+    def test_plain_text_retry_prefers_structured_single_item_fallback_after_english_residue(self):
+        module = load_retrying_translator()
+        import services.translation.llm.fallbacks as fallbacks
+
+        item = {
+            "item_id": "taxonomy-1",
+            "block_type": "text",
+            "protected_source_text": "Software verification and validation.",
+            "translation_unit_protected_source_text": "Software verification and validation.",
+            "metadata": {"structure_role": "body"},
+        }
+        calls: list[str] = []
+
+        def fake_plain(*args, **kwargs):
+            calls.append("plain")
+            raise fallbacks.EnglishResidueError(item["item_id"])
+
+        def fake_structured(*args, **kwargs):
+            calls.append("structured")
+            return {item["item_id"]: module._result_entry("translate", "软件验证与确认。")}
+
+        def fake_raw(*args, **kwargs):
+            calls.append("raw")
+            raise AssertionError("raw fallback should not be reached when structured fallback succeeds")
+
+        original_plain = fallbacks.translate_single_item_plain_text
+        original_structured = fallbacks.translate_single_item_with_decision
+        original_raw = fallbacks.translate_single_item_plain_text_unstructured
+        try:
+            fallbacks.translate_single_item_plain_text = fake_plain
+            fallbacks.translate_single_item_with_decision = fake_structured
+            fallbacks.translate_single_item_plain_text_unstructured = fake_raw
+            result = module._translate_single_item_plain_text_with_retries(item, request_label="unit")
+        finally:
+            fallbacks.translate_single_item_plain_text = original_plain
+            fallbacks.translate_single_item_with_decision = original_structured
+            fallbacks.translate_single_item_plain_text_unstructured = original_raw
+
+        self.assertEqual(calls, ["plain", "structured"])
+        self.assertEqual(result[item["item_id"]]["translated_text"], "软件验证与确认。")
+        self.assertEqual(
+            result[item["item_id"]]["translation_diagnostics"]["route_path"],
+            ["block_level", "single_decision"],
+        )
+
     def test_sentence_fallback_chunks_long_group_when_no_sentence_split_exists(self):
         module = load_retrying_translator()
         import services.translation.llm.fallbacks as fallbacks

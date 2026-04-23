@@ -86,16 +86,24 @@ export function loadBrowserStoredConfig() {
   }
 }
 
-export function saveBrowserStoredConfig() {
+export function saveBrowserStoredConfig(payload = null) {
   if (isDesktopMode() || typeof window.localStorage === "undefined") {
     return;
   }
-  const payload = {
-    mineruToken: $("mineru_token")?.value || "",
-    modelApiKey: $("api_key")?.value || "",
+  const nextPayload = payload && typeof payload === "object"
+    ? payload
+    : {
+        mineruToken: $("mineru_token")?.value || "",
+        modelApiKey: $("api_key")?.value || "",
+      };
+  const normalizedPayload = {
+    mineruToken: typeof nextPayload.mineruToken === "string" ? nextPayload.mineruToken : "",
+    modelApiKey: typeof nextPayload.modelApiKey === "string" ? nextPayload.modelApiKey : "",
+    model: typeof nextPayload.model === "string" ? nextPayload.model : "",
+    baseUrl: typeof nextPayload.baseUrl === "string" ? nextPayload.baseUrl : "",
   };
   try {
-    window.localStorage.setItem(BROWSER_CONFIG_STORAGE_KEY, JSON.stringify(payload));
+    window.localStorage.setItem(BROWSER_CONFIG_STORAGE_KEY, JSON.stringify(normalizedPayload));
   } catch (_err) {
     // Ignore storage quota / privacy mode failures.
   }

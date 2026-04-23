@@ -1,4 +1,4 @@
-import { apiBase } from "./config.js";
+import { apiBase } from "./config.js?v=20260413fix5";
 
 function numberOrNull(value) {
   const num = Number(value);
@@ -25,6 +25,35 @@ function firstNonEmpty(...values) {
   return "";
 }
 
+function normalizeArtifactUrl(value) {
+  if (!value || typeof value !== "string") {
+    return "";
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (typeof window === "undefined" || !window.location) {
+    return trimmed;
+  }
+  try {
+    const parsed = new URL(trimmed, window.location.origin);
+    if (parsed.origin === window.location.origin) {
+      return `${window.location.origin}${parsed.pathname}${parsed.search}${parsed.hash}`;
+    }
+    const sameHost = parsed.hostname === window.location.hostname;
+    const defaultPort = (parsed.protocol === "http:" && parsed.port === "80")
+      || (parsed.protocol === "https:" && parsed.port === "443")
+      || !parsed.port;
+    if (sameHost && defaultPort) {
+      return `${window.location.origin}${parsed.pathname}${parsed.search}${parsed.hash}`;
+    }
+    return parsed.toString();
+  } catch (_err) {
+    return trimmed;
+  }
+}
+
 function toAbsoluteUrl(value) {
   if (!value || typeof value !== "string") {
     return "";
@@ -34,12 +63,12 @@ function toAbsoluteUrl(value) {
     return "";
   }
   if (/^https?:\/\//i.test(trimmed)) {
-    return trimmed;
+    return normalizeArtifactUrl(trimmed);
   }
   if (trimmed.startsWith("/")) {
-    return `${apiBase()}${trimmed}`;
+    return normalizeArtifactUrl(`${apiBase()}${trimmed}`);
   }
-  return `${apiBase()}/${trimmed}`;
+  return normalizeArtifactUrl(`${apiBase()}/${trimmed}`);
 }
 
 export function isTerminalStatus(status) {

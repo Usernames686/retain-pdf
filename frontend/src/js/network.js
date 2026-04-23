@@ -1,5 +1,5 @@
-import { apiBase, buildApiHeaders, frontendApiKey } from "./config.js";
-import { unwrapEnvelope } from "./job.js";
+import { apiBase, buildApiHeaders, frontendApiKey } from "./config.js?v=20260413fix5";
+import { unwrapEnvelope } from "./job.js?v=20260413fix5";
 
 export async function fetchJobPayload(jobId, apiPrefix) {
   const resp = await fetch(`${apiBase()}${apiPrefix}/jobs/${jobId}`, {

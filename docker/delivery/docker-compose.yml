@@ -2,7 +2,10 @@ name: retainpdf
 
 services:
   app:
-    image: ${APP_IMAGE:-wxyhgk/retainpdf-app:latest}
+    image: ${APP_IMAGE:-retainpdf-app:local}
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile.app
     restart: unless-stopped
     env_file:
       - ./docker/app.env
@@ -20,7 +23,10 @@ services:
       start_period: 20s
 
   web:
-    image: ${WEB_IMAGE:-wxyhgk/retainpdf-web:latest}
+    image: ${WEB_IMAGE:-retainpdf-web:local}
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile.web
     restart: unless-stopped
     depends_on:
       app:

@@ -534,6 +534,46 @@ impl Db {
         Ok(jobs)
     }
 
+    pub fn list_expired_terminal_jobs(&self, cutoff_updated_at: &str) -> Result<Vec<JobSnapshot>> {
+        let conn = self.connect()?;
+        let terminal_statuses = [
+            serde_json::to_string(&JobStatusKind::Succeeded)?,
+            serde_json::to_string(&JobStatusKind::Failed)?,
+            serde_json::to_string(&JobStatusKind::Canceled)?,
+        ];
+        let mut stmt = conn.prepare(&format!(
+            "{JOB_SELECT_SQL} WHERE jobs.updated_at < ?1 AND jobs.status_json IN (?2, ?3, ?4) ORDER BY jobs.updated_at ASC"
+        ))?;
+        let rows = stmt.query_map(
+            params![
+                cutoff_updated_at,
+                terminal_statuses[0],
+                terminal_statuses[1],
+                terminal_statuses[2],
+            ],
+            row_to_job_snapshot,
+        )?;
+        let mut jobs = Vec::new();
+        for row in rows {
+            jobs.push(row?);
+        }
+        Ok(jobs)
+    }
+
+    pub fn delete_job_records(&self, job_id: &str) -> Result<()> {
+        let mut conn = self.connect()?;
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM events WHERE job_id = ?1", params![job_id])?;
+        tx.execute(
+            "DELETE FROM job_artifact_entries WHERE job_id = ?1",
+            params![job_id],
+        )?;
+        tx.execute("DELETE FROM artifacts WHERE job_id = ?1", params![job_id])?;
+        tx.execute("DELETE FROM jobs WHERE job_id = ?1", params![job_id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn append_event(
         &self,
         job_id: &str,

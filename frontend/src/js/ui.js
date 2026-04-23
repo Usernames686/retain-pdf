@@ -1,6 +1,6 @@
-import { $ } from "./dom.js";
-import { DEFAULT_FILE_LABEL } from "./constants.js";
-import { state } from "./state.js";
+import { $ } from "./dom.js?v=20260413fix5";
+import { DEFAULT_FILE_LABEL } from "./constants.js?v=20260413fix5";
+import { state } from "./state.js?v=20260413fix5";
 import {
   formatEventTimestamp,
   formatJobFinishedAt,
@@ -13,7 +13,7 @@ import {
   summarizePublicError,
   summarizeStageDetail,
   summarizeStatus,
-} from "./job.js";
+} from "./job.js?v=20260413fix5";
 
 const STATUS_RING_CIRCUMFERENCE = 2 * Math.PI * 62;
 
@@ -195,7 +195,8 @@ function updateRing(job) {
   const ringElapsed = $("status-ring-elapsed");
   const stageIcon = $("status-stage-icon");
   const pdfBtn = $("pdf-btn");
-  if (!progressCircle || !ringLabel || !ringValue || !ringElapsed || !stageIcon || !pdfBtn) {
+  const pdfPreviewBtn = $("pdf-preview-btn");
+  if (!progressCircle || !ringLabel || !ringValue || !ringElapsed || !stageIcon || !pdfBtn || !pdfPreviewBtn) {
     return;
   }
   const stageText = summarizeStageDetail(job);
@@ -217,6 +218,7 @@ function updateRing(job) {
   stageIcon.innerHTML = stageIconMarkup(job.status, stageText);
   const pdfReady = !pdfBtn.classList.contains("disabled") && job.status === "succeeded";
   pdfBtn.classList.toggle("hidden", !pdfReady);
+  pdfPreviewBtn.classList.toggle("hidden", !pdfReady);
   stageIcon.classList.toggle("hidden", pdfReady);
   ringLabel.classList.toggle("hidden", pdfReady);
   ringValue.classList.toggle("hidden", pdfReady);
@@ -446,13 +448,23 @@ export function setStatus(status) {
   startElapsedTicker();
 }
 
-function setActionLink(id, url, enabled) {
+function setActionLink(id, url, enabled, fallbackName = "") {
   const el = $(id);
   if (!el) {
     return;
   }
   el.href = enabled && url ? url : "#";
   el.dataset.url = enabled && url ? url : "";
+  el.dataset.fallbackName = enabled && fallbackName ? fallbackName : "";
+  if (enabled && fallbackName) {
+    el.setAttribute("download", fallbackName);
+    el.removeAttribute("target");
+    el.removeAttribute("rel");
+  } else {
+    el.removeAttribute("download");
+    el.setAttribute("target", "_blank");
+    el.setAttribute("rel", "noopener noreferrer");
+  }
   el.classList.toggle("disabled", !enabled);
   el.setAttribute("aria-disabled", enabled ? "false" : "true");
 }
@@ -460,25 +472,112 @@ function setActionLink(id, url, enabled) {
 function resolveManifestArtifactUrl(manifestPayload, artifactKey) {
   const items = Array.isArray(manifestPayload?.items) ? manifestPayload.items : [];
   const item = items.find((entry) => entry?.artifact_key === artifactKey && entry?.ready);
-  const rawUrl = item?.resource_url || item?.resource_path || "";
+  const rawUrl = item?.resource_path || item?.resource_url || "";
   if (!rawUrl) {
     return "";
   }
-  if (artifactKey !== "markdown_bundle_zip") {
-    return rawUrl;
+  let resolvedUrl = rawUrl;
+  if (/^https?:\/\//i.test(rawUrl) && typeof window !== "undefined" && window.location) {
+    try {
+      const parsed = new URL(rawUrl, window.location.origin);
+      const sameHost = parsed.hostname === window.location.hostname;
+      const defaultPort = (parsed.protocol === "http:" && parsed.port === "80")
+        || (parsed.protocol === "https:" && parsed.port === "443")
+        || !parsed.port;
+      resolvedUrl = sameHost && defaultPort
+        ? `${window.location.origin}${parsed.pathname}${parsed.search}${parsed.hash}`
+        : parsed.toString();
+    } catch (_err) {
+      resolvedUrl = rawUrl;
+    }
   }
-  const separator = rawUrl.includes("?") ? "&" : "?";
-  return `${rawUrl}${separator}include_job_dir=true`;
+  if (artifactKey !== "markdown_bundle_zip") {
+    return resolvedUrl;
+  }
+  const separator = resolvedUrl.includes("?") ? "&" : "?";
+  return `${resolvedUrl}${separator}include_job_dir=true`;
+}
+
+function setActionLabel(id, label) {
+  const el = $(id);
+  if (!el) {
+    return;
+  }
+  el.textContent = label;
+  el.setAttribute("aria-label", label);
+}
+
+function resolveDetailDownloadAction(actions, manifestPayload) {
+  const markdownBundleUrl = resolveManifestArtifactUrl(manifestPayload, "markdown_bundle_zip");
+  if (markdownBundleUrl) {
+    return {
+      url: markdownBundleUrl,
+      enabled: true,
+      label: "下载 Markdown ZIP",
+      fallbackName: "markdown.zip",
+    };
+  }
+
+  if (actions.bundleEnabled && actions.bundle) {
+    return {
+      url: actions.bundle,
+      enabled: true,
+      label: "下载结果 ZIP",
+      fallbackName: "result.zip",
+    };
+  }
+
+  if (actions.pdfEnabled && actions.pdf) {
+    return {
+      url: actions.pdf,
+      enabled: true,
+      label: "下载 PDF",
+      fallbackName: "result.pdf",
+    };
+  }
+
+  if (actions.markdownRawEnabled && actions.markdownRaw) {
+    return {
+      url: actions.markdownRaw,
+      enabled: true,
+      label: "下载 Markdown",
+      fallbackName: "result.md",
+    };
+  }
+
+  if (actions.markdownJsonEnabled && actions.markdownJson) {
+    return {
+      url: actions.markdownJson,
+      enabled: true,
+      label: "下载 Markdown JSON",
+      fallbackName: "result.json",
+    };
+  }
+
+  return {
+    url: "",
+    enabled: false,
+    label: "暂无可下载文件",
+    fallbackName: "",
+  };
 }
 
 export function updateActionButtons(job, manifestPayload = null) {
   const actions = resolveJobActions(job);
-  setActionLink("download-btn", actions.bundle, actions.bundleEnabled && !!actions.bundle);
-  const markdownBundleUrl = resolveManifestArtifactUrl(manifestPayload, "markdown_bundle_zip");
-  setActionLink("markdown-bundle-btn", markdownBundleUrl, !!markdownBundleUrl);
-  setActionLink("pdf-btn", actions.pdf, actions.pdfEnabled && !!actions.pdf);
-  setActionLink("markdown-btn", actions.markdownJson, actions.markdownJsonEnabled && !!actions.markdownJson);
-  setActionLink("markdown-raw-btn", actions.markdownRaw, actions.markdownRawEnabled && !!actions.markdownRaw);
+  setActionLink("download-btn", actions.bundle, actions.bundleEnabled && !!actions.bundle, "result.zip");
+  const detailDownload = resolveDetailDownloadAction(actions, manifestPayload);
+  setActionLink(
+    "markdown-bundle-btn",
+    detailDownload.url,
+    detailDownload.enabled && !!detailDownload.url,
+    detailDownload.fallbackName,
+  );
+  setActionLabel("markdown-bundle-btn", detailDownload.label);
+  setActionLink("pdf-btn", actions.pdf, actions.pdfEnabled && !!actions.pdf, "result.pdf");
+  setActionLink("pdf-preview-btn", actions.pdf, actions.pdfEnabled && !!actions.pdf);
+  setActionLink("pdf-preview-detail-btn", actions.pdf, actions.pdfEnabled && !!actions.pdf);
+  setActionLink("markdown-btn", actions.markdownJson, actions.markdownJsonEnabled && !!actions.markdownJson, "result.json");
+  setActionLink("markdown-raw-btn", actions.markdownRaw, actions.markdownRawEnabled && !!actions.markdownRaw, "result.md");
   $("cancel-btn").disabled = !(actions.cancelEnabled && !!actions.cancel);
 }
 

@@ -23,6 +23,7 @@ KEEP_ORIGIN_LABEL = "keep_origin"
 INTERNAL_PLACEHOLDER_DEGRADED_REASON = "placeholder_unstable"
 SHORT_FRAGMENT_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._/-]{0,7}$")
 CLAUSE_SPLIT_RE = re.compile(r"[^。！？；.!?;\n]+[。！？；.!?;\n]?")
+DEDUP_TOKEN_RE = re.compile(f"{PLACEHOLDER_RE.pattern}|[A-Za-z]+(?:[-'][A-Za-z]+)?|\\d+|[\\u4e00-\\u9fff]")
 META_TRANSLATION_PHRASES = (
     "translating ocr text",
     "i need to translate",
@@ -33,8 +34,86 @@ META_TRANSLATION_PHRASES = (
     "the source repeats due to ocr",
     "likely with repeated clauses",
 )
+META_TRANSLATION_COMMENTARY_PHRASES = (
+    "this feels like a good translation",
+    "this is a good translation",
+    "i'm wondering if",
+    "i am wondering if",
+    "should be translated to",
+    "should be translated as",
+    "keeping it succinct",
+    "keeping it concise",
+    "keeping the original meaning",
+    "reflecting the essential ideas",
+    "reflecting the original meaning",
+    "the original meaning while making it clear",
+    "to keep it",
+    "should translate both",
+    "i think it should",
+    "evaluating ocr translation",
+    "crafting readable duplication",
+    "my focus is on getting",
+    "conveys the meaning clearly",
+    "practical translation",
+    "despite the ocr mess",
+    "balancing this with",
+    "the instruction indicates",
+    "for example, i might phrase it as",
+    "i need to consider how to",
+    "should i preserve this duplication",
+    "which means",
+    "without duplication",
+    "it likely duplicates",
+    "could also work",
+    "for a policy context",
+    "for consistency in publication style",
+    "page number in the source",
+    "translate only the heading",
+    "which gives the title",
+    "gives the title",
+)
 ADJACENT_DUPLICATE_MIN_CHARS = 12
 ADJACENT_DUPLICATE_MAX_CHARS = 120
+ADJACENT_DUPLICATE_MIN_TOKENS = 2
+ADJACENT_DUPLICATE_MAX_TOKENS = 40
+ADJACENT_DUPLICATE_TOKEN_MIN_CHARS = 4
+ADJACENT_DUPLICATE_CLAUSE_MIN_CHARS = 4
+ADJACENT_DUPLICATE_NOISE_GAP_MAX_CHARS = 48
+ADJACENT_DUPLICATE_NOISE_GAP_MAX_TOKENS = 6
+CLAUSE_SPLIT_RE = re.compile(r"[^\u3002\uff01\uff1f\uff1b.!?;\n]+[\u3002\uff01\uff1f\uff1b.!?;\n]?")
+TITLE_META_REASONING_PHRASES = (
+    "considering translation",
+    "considering translation duplicates",
+    "considering translation options",
+    "evaluating translation options",
+    "translating the title",
+    "i need to consider",
+    "i need to decide",
+    "i should only translate",
+    "i think i'll",
+    "i think i will",
+    "i'll think about",
+    "i will think about",
+    "sounds awkward",
+    "it seems like",
+    "it seems there",
+    "it doesn't seem right",
+    "preserve the duplication",
+    "reflect the original text",
+    "maintaining clarity",
+    "faithful translation",
+)
+TITLE_SPLIT_RE = re.compile(r"(?:\r?\n)+|(?<=[.!?;:\u3002\uff01\uff1f\uff1b\uff1a])\s+|\*{2,}|[\"“”'‘’]+")
+TITLE_TRAILING_CJK_RE = re.compile(r"([\u4e00-\u9fffA-Za-z0-9][\u4e00-\u9fffA-Za-z0-9 \-–—·:&/()]{1,80})\s*$")
+TITLE_CJK_FRAGMENT_RE = re.compile(r"[\u4e00-\u9fff][\u4e00-\u9fffA-Za-z0-9 \-–—·:&/()]{1,80}")
+TITLE_SOURCE_TERM_RE = re.compile(r"\b(?:[A-Z][A-Za-z0-9+-]*)(?:\s+[A-Z][A-Za-z0-9+-]*)*")
+TITLE_MAX_CANDIDATE_CHARS = 96
+SHORT_ENTRY_MAX_SOURCE_CHARS = 160
+SHORT_ENTRY_MAX_CANDIDATE_CHARS = 160
+SHORT_ENTRY_SPLIT_RE = re.compile(r"(?:\r?\n){2,}|[\"“”'‘’]")
+SHORT_ENTRY_TRAILING_HEADING_RE = re.compile(
+    r"((?:\d+(?:\.\d+)*\s+)?(?:L\d[:：]\s*)?[\u4e00-\u9fffA-Za-z][^\n]{0,140}? ?(?:\.\s*\.\s*\d+|\d)?)\s*$"
+)
 
 
 class SuspiciousKeepOriginError(ValueError):
@@ -362,6 +441,322 @@ def _strip_translation_meta_preamble(text: str) -> str:
     return stripped or translated
 
 
+def _looks_like_translation_commentary_fragment(text: str) -> bool:
+    normalized = normalize_inline_whitespace(str(text or "")).strip()
+    if not normalized:
+        return False
+    lowered = normalized.lower()
+    if not any(
+        phrase in lowered
+        for phrase in META_TRANSLATION_PHRASES + META_TRANSLATION_COMMENTARY_PHRASES
+    ):
+        return False
+    english_words = re.findall(r"[A-Za-z]{2,}", normalized)
+    if len(english_words) < 4:
+        return False
+    chinese_chars = sum(1 for ch in normalized if "\u4e00" <= ch <= "\u9fff")
+    return len(english_words) >= max(4, chinese_chars)
+
+
+def _contains_meta_reasoning_signal(text: str) -> bool:
+    normalized = normalize_inline_whitespace(str(text or "")).strip()
+    if not normalized:
+        return False
+    lowered = normalized.lower()
+    if any(
+        phrase in lowered
+        for phrase in META_TRANSLATION_PHRASES + META_TRANSLATION_COMMENTARY_PHRASES + TITLE_META_REASONING_PHRASES
+    ):
+        return True
+    if not re.search(r"\b(i|maybe|perhaps|still|sounds)\b|i'll|i'm|i am|i will|which means|it likely", lowered):
+        return False
+    return bool(
+        re.search(
+            r"\b(translate|translation|title|phrasing|ocr|duplicate|duplicated|preserve|reflect|clarity|awkward|decide|consider)\b",
+            lowered,
+        )
+    )
+
+
+def _strip_translation_commentary_fragments(text: str) -> str:
+    raw = str(text or "")
+    if not raw.strip():
+        return raw
+
+    fragments = CLAUSE_SPLIT_RE.findall(raw)
+    if not fragments:
+        return raw
+
+    kept: list[str] = []
+    removed = False
+    for fragment in fragments:
+        if _looks_like_translation_commentary_fragment(fragment):
+            removed = True
+            continue
+        kept.append(fragment)
+
+    if not removed:
+        return raw
+
+    cleaned = "".join(kept).strip()
+    return cleaned or raw
+
+
+def _is_title_structure_role(item: dict) -> bool:
+    return str((item.get("metadata", {}) or {}).get("structure_role", "") or "").strip().lower() == "title"
+
+
+def _clean_title_recovery_candidate(text: str) -> str:
+    cleaned = normalize_inline_whitespace(str(text or "")).strip(" \t\r\n\"'“”‘’`*_#:-–—;,.!?")
+    for _ in range(3):
+        if not cleaned or not re.search(r"[\u4e00-\u9fff]", cleaned):
+            break
+        match = re.match(r"^(?P<prefix>[A-Za-z]+(?:\s+[A-Za-z]+){0,8})\s+(?=.*[\u4e00-\u9fff])", cleaned)
+        if not match:
+            break
+        prefix = (match.group("prefix") or "").strip().lower()
+        if not re.match(
+            r"^(considering|evaluating|translating|keeping|preserving|reflecting|maintaining|thinking|sounds|maybe|still|so|i|it|this|that|the|should|need)\b",
+            prefix,
+        ):
+            break
+        cleaned = cleaned[match.end("prefix") :].lstrip(" \t\r\n\"'“”‘’`*_#:-–—;,.!?")
+    cleaned = re.sub(r"^[\"“”'‘’]+\s*", "", cleaned)
+    cleaned = re.sub(r"\s*[\"“”'‘’]+$", "", cleaned)
+    return cleaned.strip(" \t\r\n\"'“”‘’`*_#:-–—;,.!?")
+
+
+def _is_short_translation_unit(item: dict) -> bool:
+    source = normalize_inline_whitespace(unit_source_text(item))
+    return bool(source) and len(source) <= SHORT_ENTRY_MAX_SOURCE_CHARS
+
+
+def _clean_short_entry_candidate(text: str) -> str:
+    cleaned = normalize_inline_whitespace(str(text or ""))
+    cleaned = re.sub(r"^[A-Za-z][A-Za-z .!?:;-]{0,24}(?=\d)", "", cleaned)
+    cleaned = re.sub(r"^[A-Za-z][A-Za-z .!?:;-]{0,24}(?=[\u4e00-\u9fff])", "", cleaned)
+    return cleaned.strip(" \t\r\n\"'“”‘’`*_#:-–—;,.!?")
+
+
+def _short_entry_candidate_score(source_text: str, text: str) -> int:
+    normalized = normalize_inline_whitespace(text)
+    if not normalized or len(normalized) > SHORT_ENTRY_MAX_CANDIDATE_CHARS:
+        return -10_000
+    zh_chars = _zh_char_count(normalized)
+    english_words = _english_word_count(normalized)
+    digits = sum(ch.isdigit() for ch in normalized)
+    if zh_chars == 0 and digits == 0:
+        return -10_000
+    if _contains_meta_reasoning_signal(normalized) and english_words >= 4:
+        return -8_000
+    if zh_chars >= 4 and english_words >= 5 and len(normalized) > len(source_text) + 8:
+        return -7_000
+    score = zh_chars * 8 + digits * 2 - english_words * 3 - max(0, len(normalized) - len(source_text) - 16)
+    source_prefix = re.match(r"^\d+(?:\.\d+)*", source_text)
+    if source_prefix and normalized.startswith(source_prefix.group(0)):
+        score += 40
+    if ". ." in normalized or re.search(r"\.\s*\.\s*\d+$", normalized):
+        score += 10
+    return score
+
+
+def _recover_short_entry_from_meta_reasoning(item: dict, text: str) -> str:
+    raw = str(text or "").strip()
+    source = normalize_inline_whitespace(unit_source_text(item))
+    if not raw or not source or not _is_short_translation_unit(item):
+        return raw
+    if _zh_char_count(raw) == 0:
+        return raw
+    if not (_contains_meta_reasoning_signal(raw) or (_english_word_count(raw) >= 10 and len(raw) > len(source) + 24)):
+        return raw
+
+    candidates = [raw]
+    candidates.extend(part for part in SHORT_ENTRY_SPLIT_RE.split(raw) if part and part.strip())
+    candidates.extend(
+        match.group(0)
+        for match in re.finditer(
+            r"(?:(?<=^)|(?<=[\"'“”‘’]))((?:\d+(?:\.\d+)*\s+)?(?:L\d[:ㄩ]\s*)?[\u4e00-\u9fffA-Za-z][^\n\"'“”‘’]{0,140}?(?:\.\s*\.\s*\d+|\d)?)(?=$|(?=[\"'“”‘’]))",
+            raw,
+        )
+    )
+    clean_split_candidates = []
+    for candidate in candidates[1:]:
+        cleaned = _clean_short_entry_candidate(candidate)
+        if (
+            _zh_char_count(cleaned) >= 2
+            and _english_word_count(cleaned) <= 3
+            and not _contains_meta_reasoning_signal(cleaned)
+        ):
+            clean_split_candidates.append(cleaned)
+    if clean_split_candidates:
+        best_clean = max(clean_split_candidates, key=lambda value: _short_entry_candidate_score(source, value))
+        if _short_entry_candidate_score(source, best_clean) > -500:
+            return best_clean
+    trailing = SHORT_ENTRY_TRAILING_HEADING_RE.search(raw)
+    if trailing:
+        candidates.append(trailing.group(1))
+
+    best = raw
+    best_score = -10_000
+    for candidate in candidates:
+        cleaned = _clean_short_entry_candidate(candidate)
+        score = _short_entry_candidate_score(source, cleaned)
+        if score > best_score:
+            best = cleaned
+            best_score = score
+    return best if best_score > -1_000 else raw
+
+
+def _title_candidate_score(text: str) -> int:
+    normalized = normalize_inline_whitespace(text)
+    if not normalized:
+        return -10_000
+    zh_chars = _zh_char_count(normalized)
+    english_words = _english_word_count(normalized)
+    if zh_chars < 2 or len(normalized) > TITLE_MAX_CANDIDATE_CHARS:
+        return -10_000
+    if _contains_meta_reasoning_signal(normalized) and english_words > 4:
+        return -5_000
+    return zh_chars * 10 - english_words * 4 - max(0, len(normalized) - 40)
+
+
+def _recover_title_from_meta_reasoning(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw or _zh_char_count(raw) == 0:
+        return raw
+    if not (_contains_meta_reasoning_signal(raw) or _english_word_count(raw) >= 6):
+        return raw
+
+    candidates = [raw]
+    candidates.extend(TITLE_SPLIT_RE.split(raw))
+    candidates.extend(match.group(0) for match in TITLE_CJK_FRAGMENT_RE.finditer(raw))
+    clean_split_candidates = []
+    for candidate in candidates[1:]:
+        cleaned = _clean_title_recovery_candidate(candidate)
+        if (
+            _zh_char_count(cleaned) >= 2
+            and _english_word_count(cleaned) <= 3
+            and not _contains_meta_reasoning_signal(cleaned)
+        ):
+            clean_split_candidates.append(cleaned)
+    if clean_split_candidates:
+        best_clean = max(clean_split_candidates, key=_title_candidate_score)
+        if _title_candidate_score(best_clean) > -500:
+            return best_clean
+    trailing = TITLE_TRAILING_CJK_RE.search(raw)
+    if trailing:
+        candidates.append(trailing.group(1))
+
+    best = raw
+    best_score = -10_000
+    for candidate in candidates:
+        cleaned = _clean_title_recovery_candidate(candidate)
+        score = _title_candidate_score(cleaned)
+        if score > best_score:
+            best = cleaned
+            best_score = score
+    return best if best_score > -1_000 else raw
+
+
+def _prepend_missing_title_source_context(item: dict, translated_text: str) -> str:
+    title = normalize_inline_whitespace(translated_text)
+    if not title.startswith(("的", "与", "及", "和")):
+        return translated_text
+
+    source = normalize_inline_whitespace(unit_source_text(item))
+    if not source:
+        return translated_text
+
+    candidates: list[str] = []
+    for match in TITLE_SOURCE_TERM_RE.finditer(source):
+        candidate = re.sub(r"^(?:Main|The|A|An)\s+", "", match.group(0)).strip()
+        if not candidate:
+            continue
+        if candidate.lower() in {"main", "the", "a", "an"}:
+            continue
+        if candidate in title:
+            continue
+        candidates.append(candidate)
+
+    if not candidates:
+        return translated_text
+
+    best = max(candidates, key=lambda value: (len(value.split()), len(value)))
+    return f"{best} {title}".strip()
+
+
+def _strip_leading_short_entry_garbage(item: dict, translated_text: str) -> str:
+    if not (_is_title_structure_role(item) or _is_short_translation_unit(item)):
+        return translated_text
+    cleaned = normalize_inline_whitespace(translated_text)
+    source = normalize_inline_whitespace(unit_source_text(item))
+    source_prefix = re.match(r"^\d+(?:\.\d+)*", source)
+    if source_prefix:
+        index = cleaned.find(source_prefix.group(0))
+        if 0 < index <= 24 and re.fullmatch(r"[A-Za-z .!?:;\-]+", cleaned[:index]):
+            cleaned = cleaned[index:]
+    first_cjk = next((idx for idx, ch in enumerate(cleaned) if "\u4e00" <= ch <= "\u9fff"), -1)
+    if 0 < first_cjk <= 24 and re.fullmatch(r"[A-Za-z .!?:;\-0-9]+", cleaned[:first_cjk]):
+        cleaned = cleaned[first_cjk:]
+    return cleaned.strip()
+
+
+def _prepend_missing_title_source_context(item: dict, translated_text: str) -> str:
+    title = normalize_inline_whitespace(translated_text)
+    source = normalize_inline_whitespace(unit_source_text(item))
+    if not source or not title:
+        return translated_text
+
+    should_prepend = title.startswith(("\u7684", "\u4e0e", "\u53ca", "\u548c"))
+
+    candidates: list[str] = []
+    for match in TITLE_SOURCE_TERM_RE.finditer(source):
+        candidate = re.sub(r"^(?:Main|The|A|An)\s+", "", match.group(0)).strip()
+        if not candidate:
+            continue
+        if candidate.lower() in {"main", "the", "a", "an"}:
+            continue
+        if candidate in title:
+            continue
+        candidates.append(candidate)
+
+    if not candidates:
+        return translated_text
+
+    best = max(candidates, key=lambda value: (len(value.split()), len(value)))
+    if not should_prepend:
+        should_prepend = (
+            _zh_char_count(title) >= 2
+            and _zh_char_count(title) <= 8
+            and _english_word_count(title) <= 3
+            and len(title) <= 16
+            and len(best.split()) >= 2
+        )
+    if not should_prepend:
+        return translated_text
+    return f"{best} {title}".strip()
+
+
+def _strip_leading_short_entry_garbage(item: dict, translated_text: str) -> str:
+    if not (_is_title_structure_role(item) or _is_short_translation_unit(item)):
+        return translated_text
+    cleaned = normalize_inline_whitespace(translated_text)
+    source = normalize_inline_whitespace(unit_source_text(item))
+    source_prefix = re.match(r"^\d+(?:\.\d+)*", source)
+    if source_prefix:
+        index = cleaned.find(source_prefix.group(0))
+        if 0 < index <= 24 and re.fullmatch(r"[A-Za-z .!?:;\-]+", cleaned[:index]):
+            cleaned = cleaned[index:]
+    first_cjk = next((idx for idx, ch in enumerate(cleaned) if "\u4e00" <= ch <= "\u9fff"), -1)
+    if (
+        source_prefix is None
+        and 0 < first_cjk <= 24
+        and re.fullmatch(r"[a-z .!?:;\-0-9]+", cleaned[:first_cjk])
+    ):
+        cleaned = cleaned[first_cjk:]
+    return cleaned.strip()
+
+
 def _collapse_adjacent_duplicate_clauses(text: str) -> str:
     translated = str(text or "").strip()
     if not translated:
@@ -381,7 +776,7 @@ def _collapse_adjacent_duplicate_clauses(text: str) -> str:
             current_key = normalize_inline_whitespace(current)
             if (
                 index + 1 < len(collapsed)
-                and len(strip_placeholders(current_key)) >= 12
+                and len(strip_placeholders(current_key)) >= ADJACENT_DUPLICATE_CLAUSE_MIN_CHARS
                 and current_key
                 and current_key == normalize_inline_whitespace(collapsed[index + 1])
             ):
@@ -431,6 +826,91 @@ def _collapse_adjacent_duplicate_spans(text: str) -> str:
             index += 1
         collapsed = "".join(pieces)
     return collapsed.strip()
+
+
+def _dedup_token_key(token: str) -> str:
+    return token.lower() if EN_WORD_RE.fullmatch(token or "") else token
+
+
+def _looks_like_duplicate_noise_gap(text: str) -> bool:
+    normalized = normalize_inline_whitespace(text)
+    if not normalized:
+        return True
+    if len(normalized) > ADJACENT_DUPLICATE_NOISE_GAP_MAX_CHARS:
+        return False
+    lowered = normalized.lower()
+    if any(
+        phrase in lowered
+        for phrase in META_TRANSLATION_PHRASES + META_TRANSLATION_COMMENTARY_PHRASES
+    ):
+        return True
+    if re.fullmatch(r"[\s\"'“”‘’`~.,;:!?()\[\]{}<>/\\|_-]+", normalized):
+        return True
+    english_words = EN_WORD_RE.findall(normalized)
+    if not english_words:
+        return False
+    return len(english_words) <= 6 and len(re.sub(r"[A-Za-z\s]", "", normalized)) <= 8
+
+
+def _collapse_adjacent_duplicate_token_runs(text: str) -> str:
+    collapsed = str(text or "").strip()
+    if not collapsed:
+        return collapsed
+
+    changed = True
+    while changed:
+        changed = False
+        tokens = [
+            (match.start(), match.end(), _dedup_token_key(match.group(0)))
+            for match in DEDUP_TOKEN_RE.finditer(collapsed)
+        ]
+        if len(tokens) < ADJACENT_DUPLICATE_MIN_TOKENS * 2:
+            break
+
+        pieces: list[str] = []
+        char_cursor = 0
+        index = 0
+        while index < len(tokens):
+            matched = False
+            max_window = min(ADJACENT_DUPLICATE_MAX_TOKENS, (len(tokens) - index) // 2)
+            for window in range(max_window, ADJACENT_DUPLICATE_MIN_TOKENS - 1, -1):
+                left = tokens[index : index + window]
+                duplicated_chars = sum(end - start for start, end, _token in left)
+                if duplicated_chars < ADJACENT_DUPLICATE_TOKEN_MIN_CHARS:
+                    continue
+                max_gap_tokens = min(
+                    ADJACENT_DUPLICATE_NOISE_GAP_MAX_TOKENS,
+                    len(tokens) - index - window * 2,
+                )
+                for gap_tokens in range(0, max_gap_tokens + 1):
+                    right_start_index = index + window + gap_tokens
+                    right_end_index = right_start_index + window
+                    right = tokens[right_start_index:right_end_index]
+                    if len(right) != window:
+                        continue
+                    if [token for _start, _end, token in left] != [token for _start, _end, token in right]:
+                        continue
+                    left_end = left[-1][1]
+                    right_start = right[0][0]
+                    gap = collapsed[left_end:right_start]
+                    if gap and not _looks_like_duplicate_noise_gap(gap):
+                        continue
+                    pieces.append(collapsed[char_cursor:left_end])
+                    char_cursor = right[-1][1]
+                    index = right_end_index
+                    matched = True
+                    changed = True
+                    break
+                if matched:
+                    break
+            if matched:
+                continue
+            index += 1
+
+        if changed:
+            pieces.append(collapsed[char_cursor:])
+            collapsed = "".join(pieces).strip()
+    return collapsed
 
 
 def _leading_english_word_count(text: str) -> int:
@@ -540,11 +1020,18 @@ def canonicalize_batch_result(batch: list[dict], result: dict[str, dict[str, str
             source_text = unit_source_text(item).strip()
             if decision != KEEP_ORIGIN_LABEL and translated_text:
                 translated_text = _strip_translation_meta_preamble(translated_text)
+                translated_text = _strip_translation_commentary_fragments(translated_text)
                 repaired_text = repair_safe_duplicate_placeholders(source_text, translated_text)
                 if repaired_text is not None:
                     translated_text = repaired_text
                 translated_text = _collapse_adjacent_duplicate_spans(translated_text)
+                translated_text = _collapse_adjacent_duplicate_token_runs(translated_text)
                 translated_text = _collapse_adjacent_duplicate_clauses(translated_text)
+                translated_text = _recover_short_entry_from_meta_reasoning(item, translated_text)
+                if _is_title_structure_role(item):
+                    translated_text = _recover_title_from_meta_reasoning(translated_text)
+                    translated_text = _prepend_missing_title_source_context(item, translated_text)
+                translated_text = _strip_leading_short_entry_garbage(item, translated_text)
             if (
                 decision != KEEP_ORIGIN_LABEL
                 and translated_text

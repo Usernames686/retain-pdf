@@ -6,6 +6,8 @@ import math
 import fitz
 
 from services.rendering.compress.analysis import source_pdf_has_vector_graphics
+from services.rendering.redaction.redaction_analysis import collect_page_drawing_rects
+from services.rendering.redaction.redaction_analysis import item_vector_overlap_stats
 from services.rendering.redaction.redaction import item_has_removable_text
 from services.rendering.redaction.document_ops import page_has_editable_text
 from services.rendering.redaction.document_ops import page_is_pseudo_editable_scan
@@ -21,6 +23,10 @@ AUTO_OVERLAY_MAX_SAMPLE_PAGES = 3
 AUTO_OVERLAY_MAX_ITEMS_PER_PAGE = 24
 AUTO_OVERLAY_MIN_WORDS = 7
 AUTO_OVERLAY_MIN_CHARS = 40
+AUTO_OVERLAY_VECTOR_RISK_MIN_OVERLAP_COUNT = 12
+AUTO_OVERLAY_VECTOR_RISK_MIN_OVERLAP_RATIO = 0.03
+AUTO_OVERLAY_VECTOR_RISK_MIN_ITEMS = 3
+AUTO_OVERLAY_VECTOR_RISK_MIN_REMOVABLE_RATIO = 0.35
 
 
 def resolve_page_range(total_pages: int, start_page: int, end_page: int) -> tuple[int, int]:
@@ -69,6 +75,31 @@ def should_use_overlay_for_probe_result(checked_items: int, removable_ratio: flo
     return False
 
 
+def item_has_vector_text_risk(rect: fitz.Rect, drawing_rects: list[fitz.Rect]) -> bool:
+    overlap_count, overlap_ratio = item_vector_overlap_stats(rect, drawing_rects)
+    return (
+        overlap_count >= AUTO_OVERLAY_VECTOR_RISK_MIN_OVERLAP_COUNT
+        or overlap_ratio >= AUTO_OVERLAY_VECTOR_RISK_MIN_OVERLAP_RATIO
+    )
+
+
+def should_avoid_overlay_due_to_vector_text(
+    *,
+    checked_items: int,
+    removable_items: int,
+    vector_risk_items: int,
+) -> bool:
+    if removable_items <= 0 or vector_risk_items <= 0:
+        return False
+    if vector_risk_items >= AUTO_OVERLAY_VECTOR_RISK_MIN_ITEMS:
+        return True
+    if removable_items >= AUTO_OVERLAY_SMALL_SAMPLE_MIN_ITEMS:
+        return (vector_risk_items / removable_items) >= AUTO_OVERLAY_VECTOR_RISK_MIN_REMOVABLE_RATIO
+    if checked_items >= AUTO_OVERLAY_SMALL_SAMPLE_MIN_ITEMS:
+        return (vector_risk_items / checked_items) >= AUTO_OVERLAY_VECTOR_RISK_MIN_REMOVABLE_RATIO
+    return False
+
+
 def resolve_effective_render_mode(
     *,
     render_mode: str,
@@ -103,6 +134,7 @@ def resolve_effective_render_mode(
 
         checked_items = 0
         removable_items = 0
+        vector_risk_items = 0
         sampled_pages = 0
 
         for page_idx in sorted(translated_pages_map):
@@ -115,19 +147,35 @@ def resolve_effective_render_mode(
                 continue
             sampled_pages += 1
             page = doc[page_idx]
+            drawing_rects = collect_page_drawing_rects(page)
             for rect, item, _translated_text in page_items[:AUTO_OVERLAY_MAX_ITEMS_PER_PAGE]:
                 if not is_overlay_probe_candidate(item):
                     continue
                 checked_items += 1
                 if item_has_removable_text(page, item, rect):
                     removable_items += 1
+                    if drawing_rects and item_has_vector_text_risk(rect, drawing_rects):
+                        vector_risk_items += 1
     finally:
         doc.close()
 
     removable_ratio = (removable_items / checked_items) if checked_items else 0.0
+    vector_risk_ratio = (vector_risk_items / removable_items) if removable_items else 0.0
+    if should_avoid_overlay_due_to_vector_text(
+        checked_items=checked_items,
+        removable_items=removable_items,
+        vector_risk_items=vector_risk_items,
+    ):
+        print(
+            "auto render mode selected: typst "
+            f"(vector_text_risk_items={vector_risk_items}, removable_items={removable_items}, "
+            f"checked_items={checked_items}, vector_risk_ratio={vector_risk_ratio:.2f})"
+        )
+        return "typst"
     effective_render_mode = "overlay" if should_use_overlay_for_probe_result(checked_items, removable_ratio) else "typst"
     print(
         f"auto render mode selected: {effective_render_mode} "
-        f"(removable_items={removable_items}, checked_items={checked_items}, removable_ratio={removable_ratio:.2f})"
+        f"(removable_items={removable_items}, checked_items={checked_items}, removable_ratio={removable_ratio:.2f}, "
+        f"vector_text_risk_items={vector_risk_items})"
     )
     return effective_render_mode

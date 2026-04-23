@@ -1,5 +1,6 @@
 import importlib.util
 import copy
+import os
 import sys
 import threading
 import time
@@ -56,6 +57,37 @@ class _FakeResponse:
         return self._payload
 
 
+class _FakeStreamingResponse(_FakeResponse):
+    def __init__(self, payload: dict, lines: list[str]):
+        super().__init__(payload)
+        self._lines = lines
+        self.status_code = 200
+        self.url = "https://example.com/v1/chat/completions"
+        self.reason = "OK"
+
+    def iter_lines(self, decode_unicode=True):
+        for line in self._lines:
+            yield line
+
+
+class _SplitEventStreamingSession:
+    def __init__(self):
+        self.calls = []
+
+    def post(self, *args, **kwargs):
+        self.calls.append(copy.deepcopy(kwargs.get("json", {})))
+        return _FakeStreamingResponse(
+            {},
+            [
+                b'data: {"choices":[{"delta":{"content":"\xe4',
+                b'\xbd\xa0\xe5\xa5\xbd"}}]}',
+                b"",
+                b"data: [DONE]",
+                b"",
+            ],
+        )
+
+
 class _SchemaRejectingResponse:
     status_code = 400
     url = "https://example.com/v1/chat/completions"
@@ -90,6 +122,31 @@ class _SchemaFallbackSession:
         if isinstance(response_format, dict) and response_format.get("type") == "json_schema":
             return _SchemaRejectingResponse()
         return _FakeResponse({"choices": [{"message": {"content": '{"ok": true}'}}]})
+
+
+class _EmptyBodyThenStreamingSession:
+    def __init__(self):
+        self.calls = []
+
+    def post(self, *args, **kwargs):
+        request_body = copy.deepcopy(kwargs.get("json", {}))
+        self.calls.append(
+            {
+                "url": args[0] if args else "",
+                "stream": bool(kwargs.get("stream")),
+                "response_format": request_body.get("response_format"),
+            }
+        )
+        if kwargs.get("stream"):
+            return _FakeStreamingResponse(
+                {},
+                [
+                    'data: {"choices":[{"delta":{"content":"{\\"ok\\":"}}]}',
+                    'data: {"choices":[{"delta":{"content":" true}"}}]}',
+                    "data: [DONE]",
+                ],
+            )
+        return _FakeResponse({"choices": [{"message": {"content": None}}]})
 
 
 class _AlwaysBadRequestResponse:
@@ -274,6 +331,48 @@ class TranslationRunDiagnosticsTests(unittest.TestCase):
         self.assertEqual(content, '{"ok": true}')
         self.assertEqual(len(session.calls), 1)
         self.assertEqual(session.calls[0]["response_format"]["type"], "json_object")
+
+    def test_request_chat_content_uses_streaming_fallback_when_non_stream_body_is_empty(self):
+        deepseek_client = load_deepseek_client()
+        session = _EmptyBodyThenStreamingSession()
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "demo",
+                "strict": True,
+                "schema": {"type": "object", "additionalProperties": False, "properties": {}, "required": []},
+            },
+        }
+        with patch.object(deepseek_client, "get_session", return_value=session):
+            content = deepseek_client.request_chat_content(
+                [{"role": "user", "content": "hello"}],
+                api_key="token",
+                model="gpt-5.4",
+                base_url="https://example.com/v1",
+                timeout=120,
+                request_label="stream-fallback-test",
+                response_format=response_format,
+            )
+        self.assertEqual(content, '{"ok": true}')
+        self.assertEqual(len(session.calls), 2)
+        self.assertFalse(session.calls[0]["stream"])
+        self.assertTrue(session.calls[1]["stream"])
+        self.assertEqual(session.calls[1]["response_format"]["type"], "json_schema")
+
+    def test_request_chat_content_handles_split_streaming_event_lines(self):
+        deepseek_client = load_deepseek_client()
+        session = _SplitEventStreamingSession()
+        with patch.object(deepseek_client, "get_session", return_value=session):
+            with patch.dict(os.environ, {deepseek_client.STREAM_RESPONSES_ENV: "1"}, clear=False):
+                content = deepseek_client.request_chat_content(
+                    [{"role": "user", "content": "hello"}],
+                    api_key="token",
+                    model="gpt-5.4",
+                    base_url="https://example.com/v1",
+                    timeout=120,
+                    request_label="split-stream-test",
+                )
+        self.assertEqual(content, "你好")
 
     def test_request_chat_content_includes_response_body_and_request_meta_on_400(self):
         deepseek_client = load_deepseek_client()

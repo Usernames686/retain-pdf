@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod cleanup;
 pub mod config;
 pub mod db;
 pub mod error;
@@ -203,7 +204,7 @@ async fn serve_with_shutdown(
 ) -> Result<()> {
     let state = build_state(config.clone())?;
     let app = build_app(state.clone());
-    let simple_app = build_simple_app(state);
+    let simple_app = build_simple_app(state.clone());
 
     let bind_ip: IpAddr = config.bind_host.parse()?;
     let addr = SocketAddr::new(bind_ip, config.port);
@@ -225,6 +226,7 @@ async fn serve_with_shutdown(
         shutdown.await;
         shutdown_waiter.notify_waiters();
     });
+    cleanup::spawn_retention_cleanup(state.clone(), shutdown_signal.clone());
 
     let full_server = axum::serve(listener, app).with_graceful_shutdown({
         let shutdown_signal = shutdown_signal.clone();

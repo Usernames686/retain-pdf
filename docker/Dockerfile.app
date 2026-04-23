@@ -1,4 +1,4 @@
-FROM rust:1.81-slim-bookworm AS builder
+FROM rust:1.88-slim-bookworm AS builder
 
 WORKDIR /build
 
@@ -14,9 +14,9 @@ COPY backend/rust_api/src ./backend/rust_api/src
 WORKDIR /build/backend/rust_api
 RUN cargo build --release
 
-FROM wxyhgk/retainpdf-app:4.0.6-beta AS typstsrc
-
 FROM python:3.11-slim-bookworm AS runtime
+
+ARG TYPST_VERSION=0.14.2
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -27,6 +27,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHON_BIN=python3 \
     TYPST_BIN=/usr/local/bin/typst \
     RETAIN_PDF_FONT_PATH=/usr/local/share/fonts/source-han-serif/SourceHanSerifSC-Regular.otf \
+    RETAIN_PDF_TITLE_BOLD_FONT_PATH=/usr/local/share/fonts/source-han-serif/SourceHanSerifSC-Bold.otf \
     RETAIN_PDF_TYPST_FONT_FAMILY="Source Han Serif SC" \
     RUST_API_PORT=41000 \
     RUST_API_SIMPLE_PORT=42000
@@ -41,14 +42,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=typstsrc /usr/local/bin/typst /usr/local/bin/typst
+RUN curl -fsSL -o /tmp/typst.tar.xz \
+      "https://github.com/typst/typst/releases/download/v${TYPST_VERSION}/typst-x86_64-unknown-linux-musl.tar.xz" \
+    && tar -xJf /tmp/typst.tar.xz -C /tmp \
+    && mv /tmp/typst-x86_64-unknown-linux-musl/typst /usr/local/bin/typst \
+    && chmod +x /usr/local/bin/typst \
+    && rm -rf /tmp/typst.tar.xz /tmp/typst-x86_64-unknown-linux-musl
 
 RUN mkdir -p /usr/local/share/fonts/source-han-serif
 
-COPY desktop/assets/fonts/SourceHanSerifSC-Regular.otf /usr/local/share/fonts/source-han-serif/SourceHanSerifSC-Regular.otf
+COPY backend/fonts/SourceHanSerifSC-Regular.otf /usr/local/share/fonts/source-han-serif/SourceHanSerifSC-Regular.otf
+COPY backend/fonts/SourceHanSerifSC-Bold.otf /usr/local/share/fonts/source-han-serif/SourceHanSerifSC-Bold.otf
 COPY docker/fontconfig/65-source-han-serif-alias.conf /etc/fonts/conf.d/65-source-han-serif-alias.conf
 
 RUN fc-scan /usr/local/share/fonts/source-han-serif/SourceHanSerifSC-Regular.otf >/dev/null \
+    && fc-scan /usr/local/share/fonts/source-han-serif/SourceHanSerifSC-Bold.otf >/dev/null \
     && fc-cache -f
 
 COPY docker/requirements-app.txt /tmp/requirements-app.txt
@@ -59,7 +67,8 @@ COPY backend/scripts /app/backend/scripts
 COPY backend/rust_api/auth.local.example.json /app/backend/rust_api/auth.local.example.json
 COPY docker/entrypoint-app.sh /entrypoint.sh
 
-RUN chmod +x /entrypoint.sh \
+RUN sed -i 's/\r$//' /entrypoint.sh \
+    && chmod +x /entrypoint.sh \
     && mkdir -p /app/backend/rust_api /app/backend/scripts /data/uploads /data/downloads /data/db /data/jobs
 
 VOLUME ["/data"]

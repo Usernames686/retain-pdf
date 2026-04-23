@@ -2,10 +2,10 @@
   <form method="dialog" class="desktop-shell">
     <div class="desktop-head">
       <div class="credential-dialog-head">
-        <h2>接口设置</h2>
-        <p>填写后会保存在当前浏览器中，可随时回来修改和检测。</p>
+        <h2>API Settings</h2>
+        <p>Save OCR and translation credentials in this browser, then update them whenever needed.</p>
       </div>
-      <button id="browser-credentials-close-btn" type="submit" class="dialog-close-btn" aria-label="关闭">×</button>
+      <button id="browser-credentials-close-btn" type="submit" class="dialog-close-btn" aria-label="Close">×</button>
     </div>
     <div class="desktop-body credential-dialog-body">
       <div class="credential-card-grid">
@@ -13,46 +13,60 @@
           <div class="credential-card-head">
             <div>
               <h3>MinerU</h3>
-              <p>用于 OCR 解析和版面识别。</p>
+              <p>Used for OCR parsing and layout extraction.</p>
             </div>
-            <a class="credential-card-link" href="https://mineru.net/apiManage/docs?openApplyModal=true" target="_blank" rel="noopener noreferrer">获取 Token</a>
+            <a class="credential-card-link" href="https://mineru.net/apiManage/docs?openApplyModal=true" target="_blank" rel="noopener noreferrer">Get Token</a>
           </div>
           <label>
             <span class="developer-label">
               <span>MinerU Token</span>
-              <button type="button" class="developer-hint" aria-label="MinerU Token 说明" data-tooltip="MinerU Token 用于 OCR 解析和版面识别。可通过右上角获取 Token 链接前往 MinerU 控制台申请。">i</button>
+              <button type="button" class="developer-hint" aria-label="MinerU Token help" data-tooltip="Required for MinerU OCR requests.">i</button>
             </span>
-            <input id="browser-mineru-token" type="text" autocomplete="off" placeholder="填写 MinerU Token" />
+            <input id="browser-mineru-token" type="text" autocomplete="off" placeholder="Enter MinerU token" />
           </label>
           <div class="credential-card-actions">
-            <button id="browser-mineru-validate-btn" type="button" class="secondary">检测 MinerU</button>
-            <span id="browser-mineru-validation" class="token-inline-status hidden">保存前会自动检测 MinerU Token。</span>
+            <button id="browser-mineru-validate-btn" type="button" class="secondary">Validate MinerU</button>
+            <span id="browser-mineru-validation" class="token-inline-status hidden">MinerU token status will appear here.</span>
           </div>
         </section>
 
         <section class="credential-card">
           <div class="credential-card-head">
             <div>
-              <h3>DeepSeek</h3>
-              <p>用于正文翻译和模型调用。</p>
+              <h3>Model API</h3>
+              <p>Used for translation. Supports OpenAI-compatible endpoints.</p>
             </div>
-            <a class="credential-card-link" href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener noreferrer">获取 Key</a>
+            <a class="credential-card-link" href="https://platform.openai.com/docs/api-reference/introduction" target="_blank" rel="noopener noreferrer">Compatibility Docs</a>
           </div>
           <label>
             <span class="developer-label">
-              <span>DeepSeek Key</span>
-              <button type="button" class="developer-hint" aria-label="DeepSeek Key 说明" data-tooltip="DeepSeek Key 用于正文翻译和模型调用。可通过右上角获取 Key 链接前往 DeepSeek 平台创建。">i</button>
+              <span>API Key</span>
+              <button type="button" class="developer-hint" aria-label="Model API key help" data-tooltip="Bearer token for your model gateway or provider.">i</button>
             </span>
-            <input id="browser-api-key" type="text" autocomplete="off" placeholder="填写 DeepSeek API Key" />
+            <input id="browser-api-key" type="text" autocomplete="off" placeholder="Enter model API key" />
+          </label>
+          <label>
+            <span class="developer-label">
+              <span>Base URL</span>
+              <button type="button" class="developer-hint" aria-label="Base URL help" data-tooltip="Example: https://api.openai.com/v1 or your custom gateway /v1 endpoint.">i</button>
+            </span>
+            <input id="browser-base-url" type="text" autocomplete="off" placeholder="https://api.openai.com/v1" />
+          </label>
+          <label>
+            <span class="developer-label">
+              <span>Model Name</span>
+              <button type="button" class="developer-hint" aria-label="Model name help" data-tooltip="Use the exact model id returned by the endpoint, such as gpt-5.4-mini.">i</button>
+            </span>
+            <input id="browser-model" type="text" autocomplete="off" placeholder="gpt-5.4-mini" />
           </label>
           <div class="credential-card-actions">
-            <button id="browser-deepseek-validate-btn" type="button" class="secondary">检测 DeepSeek</button>
-            <span id="browser-deepseek-validation" class="token-inline-status hidden">可检测 DeepSeek 接口是否连通。</span>
+            <button id="browser-deepseek-validate-btn" type="button" class="secondary">Validate Model API</button>
+            <span id="browser-deepseek-validation" class="token-inline-status hidden">Model API status will appear here.</span>
           </div>
         </section>
       </div>
       <div class="actions credential-dialog-actions">
-        <button id="browser-credentials-save-btn" type="button">保存</button>
+        <button id="browser-credentials-save-btn" type="button">Save</button>
       </div>
     </div>
   </form>
@@ -69,7 +83,7 @@
     <div class="desktop-body developer-auth-body">
       <label>
         <span>开发者密码</span>
-        <input id="developer-auth-password" type="password" autocomplete="current-password" placeholder="请输入密码" />
+        <input id="developer-auth-password" type="password" autocomplete="current-password" placeholder="Enter password" />
       </label>
       <div id="developer-auth-error" class="upload-status hidden"></div>
       <div class="actions credential-dialog-actions">
@@ -100,7 +114,7 @@
             <path d="M12 3.5v3m0 11v3m8.5-8.5h-3m-11 0h-3M18.01 5.99l-2.12 2.12M8.11 15.89l-2.12 2.12m0-12.02 2.12 2.12m7.78 7.78 2.12 2.12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
             <circle cx="12" cy="12" r="3.2" stroke="currentColor" stroke-width="1.6"/>
           </svg>
-          <span>执行</span>
+          <span>运行</span>
         </button>
       </div>
 
@@ -124,7 +138,7 @@
               <label>
                 <span class="developer-label">
                   <span>翻译并发</span>
-                  <button type="button" class="developer-hint" aria-label="翻译并发说明" data-tooltip="同时发送给翻译模型的并发任务数。更高通常更快，但更容易触发限流。">i</button>
+                  <button type="button" class="developer-hint" aria-label="翻译并发说明" data-tooltip="同时发送给翻译模型的并发任务数。更高通常更快，但也更容易触发限流。">i</button>
                 </span>
                 <input id="developer-workers" type="number" min="1" step="1" inputmode="numeric" />
               </label>
@@ -162,7 +176,7 @@
       </div>
       <div class="actions credential-dialog-actions">
         <button id="developer-reset-btn" type="button" class="secondary">恢复默认</button>
-        <button id="developer-save-btn" type="button">保存</button>
+        <button id="developer-save-btn" type="button">保存设置</button>
       </div>
     </div>
   </form>
@@ -171,7 +185,7 @@
 <dialog id="desktop-setup-dialog" class="desktop-dialog">
   <form method="dialog" class="desktop-shell">
     <div class="desktop-head">
-      <h2>首次配置</h2>
+      <h2>首次使用设置</h2>
       <button id="desktop-setup-close-btn" type="submit" class="dialog-close-btn" aria-label="关闭">×</button>
     </div>
     <div class="desktop-body">
@@ -182,13 +196,13 @@
           <input id="setup-mineru-token" type="text" autocomplete="off" />
         </label>
         <label>
-          <span>DeepSeek Key</span>
+          <span>Model API Key</span>
           <input id="setup-model-api-key" type="text" autocomplete="off" />
         </label>
       </div>
       <div id="desktop-setup-error" class="upload-status hidden"></div>
       <div class="actions">
-        <button id="desktop-setup-save-btn" type="button">保存并启动</button>
+        <button id="desktop-setup-save-btn" type="button">保存并继续</button>
       </div>
     </div>
   </form>
@@ -207,7 +221,7 @@
           <input id="settings-mineru-token" type="text" autocomplete="off" />
         </label>
         <label>
-          <span>DeepSeek Key</span>
+          <span>Model API Key</span>
           <input id="settings-model-api-key" type="text" autocomplete="off" />
         </label>
       </div>
@@ -252,7 +266,7 @@
         <span id="status-detail-head-icon" class="status-detail-head-icon" aria-hidden="true"></span>
         <div>
           <h2>任务详情</h2>
-          <p id="status-detail-head-note" class="status-panel-note">查看任务概览、失败原因与事件流</p>
+          <p id="status-detail-head-note" class="status-panel-note">查看任务概览、失败原因与事件流。</p>
         </div>
       </div>
       <button id="status-detail-close-btn" type="submit" class="dialog-close-btn" aria-label="关闭">×</button>
@@ -260,14 +274,15 @@
     <div class="desktop-body status-detail-body">
       <div class="detail-tabs" role="tablist" aria-label="任务详情">
         <button id="detail-tab-overview" type="button" class="detail-tab is-active" data-tab="overview" role="tab" aria-selected="true">概览</button>
-        <button id="detail-tab-failure" type="button" class="detail-tab" data-tab="failure" role="tab" aria-selected="false">失败</button>
-        <button id="detail-tab-events" type="button" class="detail-tab" data-tab="events" role="tab" aria-selected="false">事件</button>
+        <button id="detail-tab-failure" type="button" class="detail-tab" data-tab="failure" role="tab" aria-selected="false">失败诊断</button>
+        <button id="detail-tab-events" type="button" class="detail-tab" data-tab="events" role="tab" aria-selected="false">事件流</button>
       </div>
 
       <div class="detail-tab-panels">
         <section id="detail-panel-overview" class="detail-tab-panel is-active" data-panel="overview" role="tabpanel">
           <div class="detail-download-row">
             <a id="markdown-bundle-btn" class="button-link secondary disabled" href="#" target="_blank" rel="noopener noreferrer">下载 Markdown ZIP</a>
+            <a id="pdf-preview-detail-btn" class="button-link secondary disabled" href="#" target="_blank" rel="noopener noreferrer">在线浏览 PDF</a>
           </div>
           <div class="detail-grid">
             <div class="detail-item">
@@ -279,7 +294,7 @@
               <span id="runtime-stage-elapsed" class="info-value">-</span>
             </div>
             <div class="detail-item">
-              <span class="label">累计耗时</span>
+              <span class="label">总耗时</span>
               <span id="runtime-total-elapsed" class="info-value">-</span>
             </div>
             <div class="detail-item">
@@ -287,17 +302,17 @@
               <span id="runtime-retry-count" class="info-value">0</span>
             </div>
             <div class="detail-item">
-              <span class="label">最近切换</span>
+              <span class="label">最近阶段切换</span>
               <span id="runtime-last-transition" class="info-value">-</span>
             </div>
             <div class="detail-item">
-              <span class="label">终态原因</span>
+              <span class="label">结束原因</span>
               <span id="runtime-terminal-reason" class="info-value">-</span>
             </div>
           </div>
           <div class="status-panel detail-stage-panel">
             <div class="status-panel-head">
-              <h3>过程时间线</h3>
+              <h3>阶段时间线</h3>
             </div>
             <div id="overview-stage-empty" class="events-empty">暂无阶段记录</div>
             <div id="overview-stage-list" class="stage-history-list hidden"></div>
@@ -328,7 +343,7 @@
                 <span id="failure-suggestion" class="info-value">-</span>
               </div>
               <div class="info-row">
-                <span class="label">最近日志</span>
+                <span class="label">最后日志</span>
                 <span id="failure-last-log-line" class="info-value">-</span>
               </div>
               <div class="info-row">
@@ -345,7 +360,7 @@
               <h3>事件流</h3>
               <span id="events-status" class="status-panel-note">最近 50 条</span>
             </div>
-            <div id="events-empty" class="events-empty">暂无事件</div>
+            <div id="events-empty" class="events-empty">暂无事件记录</div>
             <div id="events-list" class="events-list hidden"></div>
           </div>
         </section>

@@ -142,6 +142,66 @@ docker compose ps
 - [wxyhgk/retainpdf-app](https://hub.docker.com/r/wxyhgk/retainpdf-app)
 - [wxyhgk/retainpdf-web](https://hub.docker.com/r/wxyhgk/retainpdf-web)
 
+## 最近更新
+
+下面这批改动是围绕“扫描版 / 复杂排版 PDF 能稳定跑通、结果更干净、线上部署更省心”做的一轮系统性修复。
+
+### 1. 自定义大模型 API 兼容
+
+- 已兼容 OpenAI 风格的自定义模型 API。
+- 支持自定义 `base_url`、`api_key`、`model`，可直接接入兼容 `/v1/chat/completions` 的服务。
+- 已验证 `gpt-5.4` + 自定义 OpenAI 兼容接口可用于翻译流程。
+
+### 2. 标题翻译策略修复
+
+- 修复了标题被错误跳过翻译的问题。
+- 现在 `skip_title_translation=false` 时，标题会正常进入翻译队列。
+- 补充了对应回归测试，避免后续再出现“正文翻了、标题没翻”的情况。
+
+### 3. 翻译结果清洗增强
+
+针对一类很常见的模型污染问题做了通用处理，不再只是针对单个 PDF 打补丁：
+
+- 清理模型把“思考过程 / 解释语句”混进标题、目录项、短文本块的情况。
+- 清理诸如 `This feels like a good translation`、`I'm wondering if`、`could also work`、`which gives the title` 这类英文点评残留。
+- 修复 OCR 噪声导致的短标题、目录项重复、半截标题、前缀脏文本等问题。
+- 增强标题上下文补全，避免清洗后只剩“主要用例”这类半截标题。
+
+这部分已经加入专门的回归测试，覆盖：
+
+- 标题推理串清洗
+- 目录项污染恢复
+- 内联英文点评清洗
+- 短标题上下文补全
+- 防止误补单词级英文前缀
+
+### 4. 渲染与字体路径兼容增强
+
+- 同步并兼容了上游近期与标题适配、字体路径、Typst project root 相关的渲染改动。
+- 修复了部分环境下 `source file must be contained in project root` 一类渲染失败问题。
+- 增强了 Docker / 服务器环境中的字体定位与渲染稳定性。
+
+### 5. 前端任务页与下载体验修复
+
+- 修复任务详情页下载按钮、在线浏览入口、运行时配置加载异常等问题。
+- 修复部分前端乱码与交互无响应问题。
+- 现在任务完成后，PDF / Markdown ZIP / 在线查看链路更完整。
+
+### 6. 任务产物自动清理
+
+- 新增任务文件保留策略：默认保留 30 天。
+- 超过 30 天后自动清理任务目录、下载 ZIP 与数据库记录。
+- 避免服务器长期堆积历史 PDF、ZIP 与任务元数据。
+
+### 7. 线上验证状态
+
+这轮不是只做本地修补，已经实际同步到线上 Docker 容器并做过多轮真实文件回归：
+
+- `article.pdf`：目录项英文点评污染已清掉。
+- `how-anthropic-uses-claude-code.pdf`：标题解释串、短标题缺上下文、标题污染等问题已明显改善。
+
+当前这套规则仍在持续迭代，但已经从“针对单个文件修 bug”提升为“面向一类 PDF 异常的通用清洗与恢复策略”。
+
 ## 开发者
 
 

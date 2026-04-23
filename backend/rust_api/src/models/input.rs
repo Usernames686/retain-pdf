@@ -242,6 +242,7 @@ impl Default for RuntimeInput {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
 pub struct ResolvedJobSpec {
     pub workflow: WorkflowKind,
     pub job_id: String,
@@ -253,9 +254,13 @@ pub struct ResolvedJobSpec {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
 pub struct ResolvedSourceSpec {
+    #[serde(default)]
     pub upload_id: String,
+    #[serde(default)]
     pub source_url: String,
+    #[serde(default)]
     pub artifact_job_id: String,
 }
 
@@ -446,5 +451,26 @@ mod tests {
         assert!(!spec.job_id.trim().is_empty());
         assert_eq!(spec.source.upload_id, "upload-1");
         assert_eq!(spec.resolved_workers(), 100);
+    }
+
+    #[test]
+    fn resolved_job_spec_deserializes_legacy_source_without_artifact_job_id() {
+        let spec: ResolvedJobSpec = serde_json::from_value(json!({
+            "workflow": "mineru",
+            "job_id": "job-legacy",
+            "source": {
+                "upload_id": "upload-legacy",
+                "source_url": ""
+            },
+            "ocr": {},
+            "translation": {},
+            "render": {},
+            "runtime": {}
+        }))
+        .expect("parse legacy resolved spec");
+
+        assert_eq!(spec.job_id, "job-legacy");
+        assert_eq!(spec.source.upload_id, "upload-legacy");
+        assert!(spec.source.artifact_job_id.is_empty());
     }
 }

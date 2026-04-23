@@ -17,16 +17,36 @@ from services.rendering.typst.source_builder import build_typst_overlay_source
 
 def _resolved_font_paths(font_paths: list[Path] | None = None) -> list[Path]:
     resolved: list[Path] = []
+    if fonts.BACKEND_FONTS_DIR.exists():
+        resolved.append(fonts.BACKEND_FONTS_DIR)
     raw = os.environ.get("RETAIN_PDF_TYPST_FONT_DIRS", "").strip()
     if raw:
         for item in raw.split(os.pathsep):
             value = item.strip()
             if value:
-                resolved.append(Path(value))
+                path = Path(value)
+                if path not in resolved:
+                    resolved.append(path)
     for item in font_paths or []:
         if item not in resolved:
             resolved.append(item)
     return resolved
+
+
+def _typst_project_root(*paths_like: Path | None) -> Path:
+    roots: list[str] = []
+    for candidate in paths_like:
+        if candidate is None:
+            continue
+        try:
+            resolved = candidate.resolve(strict=False)
+        except Exception:
+            resolved = candidate
+        anchor = resolved if resolved.is_dir() else resolved.parent
+        roots.append(str(anchor))
+    if not roots:
+        return paths.ROOT_DIR
+    return Path(os.path.commonpath(roots))
 
 
 def _typst_compile_command(typ_path: Path, pdf_path: Path, font_paths: list[Path] | None = None) -> list[str]:
@@ -109,7 +129,7 @@ def compile_typst_book_background_pdf(
         build_typst_book_background_source(source_pdf_path, page_specs, work_dir, font_family=font_family),
         encoding="utf-8",
     )
-    command = [TYPST_BIN, "compile", "--root", str(paths.ROOT_DIR)]
+    command = [TYPST_BIN, "compile", "--root", str(_typst_project_root(work_dir, typ_path, pdf_path, source_pdf_path))]
     for font_path in _resolved_font_paths(font_paths):
         command.extend(["--font-path", str(font_path)])
     command.extend([str(typ_path), str(pdf_path)])
@@ -141,7 +161,12 @@ def compile_typst_render_pages_pdf(
         ),
         encoding="utf-8",
     )
-    command = [TYPST_BIN, "compile", "--root", str(paths.ROOT_DIR)]
+    command = [
+        TYPST_BIN,
+        "compile",
+        "--root",
+        str(_typst_project_root(work_dir, typ_path, pdf_path, background_pdf_path)),
+    ]
     for font_path in _resolved_font_paths(font_paths):
         command.extend(["--font-path", str(font_path)])
     command.extend([str(typ_path), str(pdf_path)])

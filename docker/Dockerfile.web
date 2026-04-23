@@ -17,6 +17,7 @@ RUN rm -rf \
   /usr/share/nginx/html/tailwind.config.js \
   /usr/share/nginx/html/.gitignore
 
-RUN chmod +x /docker-entrypoint.d/99-runtime-config.sh
+RUN sed -i 's/\r$//' /docker-entrypoint.d/99-runtime-config.sh \
+    && chmod +x /docker-entrypoint.d/99-runtime-config.sh
 
 EXPOSE 80

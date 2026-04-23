@@ -30,6 +30,8 @@ pub struct AppConfig {
     pub upload_max_pages: u32,
     pub api_keys: HashSet<String>,
     pub max_running_jobs: usize,
+    pub job_retention_days: u64,
+    pub cleanup_interval_hours: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -125,6 +127,14 @@ impl AppConfig {
                 .unwrap_or(0),
             api_keys,
             max_running_jobs,
+            job_retention_days: env::var("RUST_API_JOB_RETENTION_DAYS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(30),
+            cleanup_interval_hours: env::var("RUST_API_CLEANUP_INTERVAL_HOURS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(24),
         })
     }
 
@@ -181,6 +191,8 @@ impl AppConfig {
             upload_max_pages: 0,
             api_keys: [api_key].into_iter().collect(),
             max_running_jobs: 4,
+            job_retention_days: 30,
+            cleanup_interval_hours: 24,
         })
     }
 }

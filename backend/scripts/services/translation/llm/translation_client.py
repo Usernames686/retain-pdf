@@ -24,6 +24,15 @@ TAGGED_ITEM_RE = re.compile(
 )
 
 
+def _single_item_result_from_text(item: dict, content: str) -> dict[str, dict[str, str]]:
+    return {
+        item["item_id"]: result_entry(
+            "translate",
+            extract_single_item_translation_text(content, item["item_id"]),
+        )
+    }
+
+
 def parse_translation_payload(content: str) -> dict[str, dict[str, str]]:
     result: dict[str, dict[str, str]] = {}
     for match in TAGGED_ITEM_RE.finditer(content or ""):
@@ -173,14 +182,20 @@ def translate_single_item_with_decision(
     )
     try:
         payload = json.loads(extract_json_text(content))
-        result = {
-            item["item_id"]: result_entry(
-                str(payload.get("decision", "translate") or "translate"),
-                unwrap_translation_shell(str(payload.get("translated_text", "") or ""), item_id=item["item_id"]),
-            )
-        }
+        if isinstance(payload, dict) and ("translated_text" in payload or "decision" in payload):
+            result = {
+                item["item_id"]: result_entry(
+                    str(payload.get("decision", "translate") or "translate"),
+                    unwrap_translation_shell(str(payload.get("translated_text", "") or ""), item_id=item["item_id"]),
+                )
+            }
+        else:
+            result = parse_translation_payload(content)
     except Exception:
-        result = parse_translation_payload(content)
+        try:
+            result = parse_translation_payload(content)
+        except Exception:
+            result = _single_item_result_from_text(item, content)
     result = canonicalize_batch_result([item], result)
     validate_batch_result([item], result, diagnostics=diagnostics)
     return result
