@@ -337,3 +337,135 @@ curl -X POST "$HOST/api/v1/translate/bundle" \
   -F "batch_size=1" \
   -o result.zip
 ```
+
+---
+
+# 补充：部署 `codex/sync-20260423` 分支
+
+如果你要部署“今天修过并且已经做过线上验证”的这一版，不要拉默认分支，直接拉：
+
+```bash
+git clone -b codex/sync-20260423 https://github.com/Usernames686/retain-pdf.git
+cd retain-pdf/docker/delivery
+```
+
+这版分支相对旧版本，额外包含：
+
+- 自定义 OpenAI 兼容模型 API 接入
+- 标题翻译修复
+- 下载 / 在线浏览链路修复
+- 标题、目录项、短文本块中的模型英文点评清洗
+- 渲染与字体路径兼容增强
+- 任务产物 30 天自动清理
+
+## 这版最重要的配置
+
+部署前至少确认这几个文件：
+
+- `docker/auth.local.json`
+- `docker/web.env`
+- `docker/app.env`
+
+### `docker/auth.local.json`
+
+确保 `api_keys` 里有你自己的后端 key，例如：
+
+```json
+{
+  "api_keys": [
+    "replace-with-your-backend-key"
+  ],
+  "max_running_jobs": 4,
+  "simple_port": 42000
+}
+```
+
+### `docker/web.env`
+
+如果你要让网页默认带出你自己的 OCR / 模型配置，建议至少改这几项：
+
+```env
+FRONT_X_API_KEY=replace-with-your-backend-key
+FRONT_MINERU_TOKEN=你的_MinerU_Token
+FRONT_MODEL_API_KEY=你的模型APIKey
+FRONT_MODEL=your-model-name
+FRONT_BASE_URL=https://your-openai-compatible-endpoint.example/v1
+FRONT_PROVIDER_PRESET=deepseek
+```
+
+说明：
+
+- `FRONT_X_API_KEY` 必须和 `docker/auth.local.json` 里的某个 key 一致
+- `FRONT_MINERU_TOKEN` 是 OCR token
+- `FRONT_MODEL_API_KEY` 是模型接口 key
+- `FRONT_MODEL` 是模型名
+- `FRONT_BASE_URL` 是 OpenAI 兼容接口地址
+
+### `docker/app.env`
+
+这版建议保留或确认这些值：
+
+```env
+RUST_API_MAX_RUNNING_JOBS=4
+RUST_API_NORMAL_MAX_BYTES=209715200
+RUST_API_NORMAL_MAX_PAGES=600
+PDF_TRANSLATOR_DEEPSEEK_STREAM=1
+RETAIN_PDF_FONT_PATH=/usr/local/share/fonts/source-han-serif/SourceHanSerifSC-Regular.otf
+RETAIN_PDF_TYPST_FONT_FAMILY=Source Han Serif SC
+```
+
+## 启动方式
+
+```bash
+docker compose up -d --build
+```
+
+说明：
+
+- `--build` 会按当前分支代码重新构建镜像
+- 这一步会启动 `app` 和 `web`
+
+## 启动后检查
+
+先看容器状态：
+
+```bash
+docker compose ps
+```
+
+再做健康检查：
+
+```bash
+curl http://127.0.0.1:41000/health
+```
+
+正常网页入口：
+
+```text
+http://127.0.0.1:40001
+```
+
+## 这版建议重点验证
+
+建议至少跑两类 PDF：
+
+1. 普通论文 PDF
+2. OCR 噪声较重的扫描版 PDF
+
+重点看：
+
+- 标题是否已翻译
+- 目录项是否还混入 `could also work`、`This feels like...`、`which gives the title` 这类英文点评
+- 任务完成后 PDF / Markdown ZIP / 在线浏览是否都可用
+
+## 后续更新这条分支
+
+如果后面继续沿着这条分支更新：
+
+```bash
+cd retain-pdf
+git checkout codex/sync-20260423
+git pull origin codex/sync-20260423
+cd docker/delivery
+docker compose up -d --build
+```
